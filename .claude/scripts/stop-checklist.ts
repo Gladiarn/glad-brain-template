@@ -38,7 +38,9 @@
  * and the handed-over report are held under Claude Code's hook output cap
  * (lib/hook-io.ts).
  * The documented event name is the only branch — no agent sniffing and no
- * agent-specific argument.
+ * agent-specific argument. A field one agent spells differently is read under
+ * every spelling, so it means the same thing whoever sent it and never tells
+ * the agents apart (the re-entry flag below).
  *
  * Under the template's Claude Code mod (#264, lib/om-mod.ts) the mod presents
  * the report itself: it runs this script with `om_mod: "report"` to get the
@@ -92,6 +94,7 @@ type HookInput = {
 	readonly hook_event_name?: unknown;
 	readonly session_id?: unknown;
 	readonly stop_hook_active?: unknown;
+	readonly stopHookActive?: unknown;
 };
 
 const input = await readStdinJson<HookInput>();
@@ -108,7 +111,9 @@ if (omMod === "standdown") {
 // writeSilentHookOutput for why "sometimes silent, sometimes JSON" is the
 // weaker contract.
 // The mod's `report` run is not a re-entry: the mod decides when to ask.
-if (input?.stop_hook_active === true && omMod !== "report") {
+// The flag counts under either spelling, whichever agent sent it: Grok's Stop
+// carries only `stopHookActive` (#323).
+if ((input?.stop_hook_active === true || input?.stopHookActive === true) && omMod !== "report") {
 	writeSilentHookOutput();
 	process.exit(0);
 }
