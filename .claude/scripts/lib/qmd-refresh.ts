@@ -277,6 +277,23 @@ function touchSentinel(sentinelPath: string): void {
 }
 
 /**
+ * The switch that stops the detached qmd refresh: this trigger's worker, and
+ * session-start's update. Every test process carries it, so a suite leaves
+ * no qmd work behind (#337); wiki-mind's vendored copy uses the same name
+ * (wiki-mind #93).
+ */
+export const REFRESH_SWITCH = "VAULT_QMD_REFRESH";
+
+/**
+ * Whether the detached qmd refresh is switched off for this process: exactly
+ * "off". wiki-mind's copy reads the same variable the same way, and one
+ * variable must mean the same to every vault's hooks.
+ */
+export function refreshDisabled(): boolean {
+	return process.env[REFRESH_SWITCH] === "off";
+}
+
+/**
  * Spawn the detached worker. `stdio: 'ignore'` + `.unref()` + `detached`
  * survive parent exit without leaving file descriptors open, and
  * `windowsHide: true` suppresses the transient console window that a
@@ -348,9 +365,14 @@ export function triggerDebouncedRefresh(opts: {
 		debug(`${opts.logPrefix}: qmd not resolvable; skipping`);
 		return;
 	}
+	// VAULT_QMD_REFRESH=off (set by the test runner) stops the detached worker
+	// and nothing else: the decision and its sentinel and pending stamps run
+	// as usual, so the trigger's observable behaviour is unchanged (#337).
 	const spawnWorker =
 		opts.spawnWorker ??
-		((path: string, args: readonly string[]) => spawnDetachedWorker(path, opts.logPrefix, args));
+		(refreshDisabled()
+			? () => debug(`${opts.logPrefix}: refresh off (${REFRESH_SWITCH}=off); no worker spawned`)
+			: (path: string, args: readonly string[]) => spawnDetachedWorker(path, opts.logPrefix, args));
 
 	if (plan === "now") {
 		touchSentinel(opts.sentinelPath);

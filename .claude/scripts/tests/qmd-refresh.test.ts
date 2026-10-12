@@ -29,8 +29,10 @@ import {
 	resolveVaultRoot,
 	shouldRefreshForPath,
 	triggerDebouncedRefresh,
+	REFRESH_SWITCH,
+	refreshDisabled,
 } from "../lib/qmd-refresh.ts";
-import { rmTemp } from "./_helpers.ts";
+import { rmTemp, waitFor } from "./_helpers.ts";
 
 /**
  * The debounce used to fire on the leading edge only: a note written inside
@@ -118,6 +120,118 @@ describe("triggerDebouncedRefresh — schedules one trailing flush per window", 
 		} finally {
 			rmTemp(f.dir);
 		}
+	});
+});
+
+describe("VAULT_QMD_REFRESH=off — no detached worker (#337)", () => {
+	// The test runner sets this so a suite leaves no qmd-refresh-run worker
+	// behind. The real spawner is observed through a fake worker that writes
+	// a marker when it runs: no seam, so the switch is what decides.
+	function fixture() {
+		const dir = mkdtempSync(join(tmpdir(), "qmd-refresh-off-"));
+		const sentinel = join(dir, ".qmd-refresh-sentinel");
+		const marker = join(dir, "worker-ran");
+		const workerPath = join(dir, "fake-worker.mjs");
+		writeFileSync(workerPath, `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(marker)}, "");\n`);
+		const fire = () =>
+			triggerDebouncedRefresh({ sentinelPath: sentinel, workerPath, debounceMs: 30_000, logPrefix: "test", qmdAvailable: () => true });
+		return { dir, sentinel, marker, fire };
+	}
+	/** Run `body` with VAULT_QMD_REFRESH set to `value` (or removed), restoring it after. */
+	function withSwitch(value: string | undefined, body: () => Promise<void>): Promise<void> {
+		const before = process.env[REFRESH_SWITCH];
+		if (value === undefined) delete process.env[REFRESH_SWITCH];
+		else process.env[REFRESH_SWITCH] = value;
+		return body().finally(() => {
+			if (before === undefined) delete process.env[REFRESH_SWITCH];
+			else process.env[REFRESH_SWITCH] = before;
+		});
+	}
+	const appears = async (path: string, ms: number) => {
+		await waitFor(() => existsSync(path), ms);
+		return existsSync(path);
+	};
+
+	// How long a real spawn took to show its marker, measured by the control.
+	// The negative tests wait well past it, so a slow cold start cannot pass
+	// for "nothing spawned".
+	let spawnMs = 0;
+	// Unmeasured (the control was filtered out or failed): the control's own
+	// 10 s ceiling, never a guess that a slow spawn could outlast.
+	const negativeWaitMs = () => (spawnMs === 0 ? 10_000 : Math.max(2_000, 3 * spawnMs));
+
+	test("control: with the switch unset the real worker runs, so the observation works", async () => {
+		await withSwitch(undefined, async () => {
+			const f = fixture();
+			try {
+				const start = Date.now();
+				f.fire();
+				assert.ok(await appears(f.marker, 10_000), "the fake worker never ran: the test cannot see a spawn");
+				spawnMs = Date.now() - start;
+			} finally {
+				rmTemp(f.dir);
+			}
+		});
+	});
+
+	test("the immediate path spawns nothing, and still stamps the sentinel", async () => {
+		await withSwitch("off", async () => {
+			const f = fixture();
+			try {
+				f.fire();
+				assert.ok(existsSync(f.sentinel), "the sentinel is still stamped");
+				assert.equal(await appears(f.marker, negativeWaitMs()), false, "a worker ran with VAULT_QMD_REFRESH=off");
+			} finally {
+				rmTemp(f.dir);
+			}
+		});
+	});
+
+	test("the trailing path spawns nothing, and still claims the pending marker", async () => {
+		await withSwitch("off", async () => {
+			const f = fixture();
+			try {
+				// Fresh, as runHook leaves it: the trailing path. Aged 10 s, because a
+				// sentinel stamped in the same millisecond reads as clock skew.
+				writeFileSync(f.sentinel, "");
+				const t = (Date.now() - 10_000) / 1000;
+				utimesSync(f.sentinel, t, t);
+				f.fire();
+				assert.ok(existsSync(pendingPathFor(f.sentinel)), "the pending marker is still claimed");
+				assert.equal(await appears(f.marker, negativeWaitMs()), false, "a worker ran with VAULT_QMD_REFRESH=off");
+			} finally {
+				rmTemp(f.dir);
+			}
+		});
+	});
+
+	test("the switch is exactly 'off', as wiki-mind's copy reads it; anything else leaves the refresh on", async () => {
+		// One variable read by two vaults' hooks must mean the same to both.
+		for (const [value, off] of [["off", true], ["OFF", false], [" off ", false], ["on", false], ["", false], ["0", false]] as const) {
+			await withSwitch(value, async () => {
+				assert.equal(refreshDisabled(), off, JSON.stringify(value));
+			});
+		}
+	});
+
+	test("an explicit spawnWorker seam still runs when the switch is off", async () => {
+		await withSwitch("off", async () => {
+			const dir = mkdtempSync(join(tmpdir(), "qmd-refresh-off-seam-"));
+			try {
+				const spawned: (readonly string[])[] = [];
+				triggerDebouncedRefresh({
+					sentinelPath: join(dir, ".qmd-refresh-sentinel"),
+					workerPath: "worker.ts",
+					debounceMs: 30_000,
+					logPrefix: "test",
+					qmdAvailable: () => true,
+					spawnWorker: (_p, args) => spawned.push(args),
+				});
+				assert.deepEqual(spawned, [[]]);
+			} finally {
+				rmTemp(dir);
+			}
+		});
 	});
 });
 

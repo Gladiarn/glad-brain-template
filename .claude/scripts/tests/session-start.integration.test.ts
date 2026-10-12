@@ -82,6 +82,19 @@ const REQUIRED_SECTIONS = [
 	"### Vault File Listing",
 ];
 
+describe("session-start — no detached qmd refresh under the switch (#337)", () => {
+	// SessionStart always reaches its detached spawn: a resolvable qmd runs
+	// `qmd update` (or the bootstrap, against a test's empty index), and
+	// without one it falls back to a shell `qmd update`. Under
+	// VAULT_QMD_REFRESH=off it must spawn nothing. The switch comes from
+	// runScript's default, the choke point every hook a test runs goes through.
+	test("under the switch, no detached qmd is spawned", () => {
+		const { code, stderr } = spawnHook(SCRIPT, "", { CLAUDE_PROJECT_DIR: TMP_DIR, HOOK_DEBUG: "1" });
+		assert.equal(code, 0);
+		assert.match(stderr, /session-start: qmd refresh off \(VAULT_QMD_REFRESH=off\); nothing spawned/);
+	});
+});
+
 describe("session-start — silence contract and structure", () => {
 	test("exits 0 with empty stderr on a minimal vault", () => {
 		const { code, stderr } = runHook();

@@ -21,15 +21,19 @@
  *
  * Every hook that writes or stops refreshes QMD through a debounce sentinel
  * beside the scripts. A test that names no sentinel of its own gets
- * TEST_SENTINEL instead, touched before each spawn: the real one is never
- * written, and a sentinel that fresh keeps the refresh debounced, so no test
- * starts a real index update of the checkout it runs in.
+ * TEST_SENTINEL instead, touched before each spawn, so the real one is never
+ * written. A fresh sentinel does NOT stop the refresh: it sends the trigger
+ * down its trailing path, which schedules a detached worker. What stops it
+ * is VAULT_QMD_REFRESH=off, which every test process carries (set by
+ * `_run-tests.ts` and `_qmd-cache-guard.ts`), so no test starts a real
+ * index update or leaves a worker behind (#337).
  */
 
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { REFRESH_SWITCH } from "../lib/qmd-refresh.ts";
 
 const SENTINEL_DIR = mkdtempSync(join(tmpdir(), "om-test-sentinel-"));
 export const TEST_SENTINEL = join(SENTINEL_DIR, ".qmd-refresh-sentinel");
@@ -57,7 +61,9 @@ export function runScript(
 			: typeof stdin === "string"
 				? stdin
 				: JSON.stringify(stdin);
-	const env = { ...process.env, QMD_REFRESH_SENTINEL: TEST_SENTINEL, ...envOverrides };
+	// The switch before the caller's overrides: every hook a test runs gets it,
+	// whatever this process carries, and a test can still opt back in (#337).
+	const env = { ...process.env, [REFRESH_SWITCH]: "off", QMD_REFRESH_SENTINEL: TEST_SENTINEL, ...envOverrides };
 	if (env.QMD_REFRESH_SENTINEL === TEST_SENTINEL) writeFileSync(TEST_SENTINEL, "");
 	const proc = spawnSync(
 		process.execPath,
