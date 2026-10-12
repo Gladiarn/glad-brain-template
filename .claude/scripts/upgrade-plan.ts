@@ -12,7 +12,13 @@
  *   `shardmind adopt <source> --from-version <v> --dry-run --yes --json`,
  *   fetches that release to hash each file's base, and classifies with
  *   `classifyAdopt`.
- * Prints the report (or, with --json, `{ mode, from, to, report }`).
+ * In both modes, a CLAUDE.md or GEMINI.md still in the vault is reported as a
+ * move (#321): Claude Code reads a CLAUDE.md in place of AGENTS.md, and
+ * Gemini no longer reads GEMINI.md. In an unmanaged clone, one whose
+ * bytes are the release it was cloned from is behind instead, and
+ * --apply-behind deletes it.
+ * Prints the report (or, with --json, `{ mode, from, to, report,
+ * settleFirst }`).
  *
  * --apply-behind (unmanaged clone only): writes the latest release's bytes
  * for every BEHIND file — one the user never changed — after checking each
@@ -37,6 +43,10 @@ import {
 	classifyAdopt,
 	classifyUpdate,
 	formatUpgradeReport,
+	retiredFileReady,
+	settleFirst,
+	untouchedRetiredFiles,
+	withRetiredInstructionFiles,
 	type AdoptPlan,
 	type ShardmindEnvelope,
 	type StatusResult,
@@ -158,33 +168,50 @@ function main(): void {
 		const plan = shardmind<AdoptPlan>(vault, ["adopt", source, "--from-version", from, "--dry-run", "--yes", "--json"]);
 		if (!plan.ok) fail(`adopt plan: ${plan.error.message}${plan.error.hint ? ` — ${plan.error.hint}` : ""}`);
 		const base = cloneRelease(source, from);
+		// Retired instruction files the user never edited: the latest release
+		// has none, so applying "behind" for them means deleting them.
+		let untouched: string[] = [];
 		try {
-			report = classifyAdopt(plan.result, (p) => {
-				const f = join(base, p);
+			const hashIn = (dir: string) => (p: string) => {
+				const f = join(dir, p);
 				return existsSync(f) ? sha256(readFileSync(f)) : null;
-			});
+			};
+			report = classifyAdopt(plan.result, hashIn(base));
+			untouched = untouchedRetiredFiles(hashIn(vault), hashIn(base), retiredFileReady(plan.result, report));
 		} finally {
 			rmSync(base, { recursive: true, force: true });
 		}
+		const toWrite = report.behind;
+		report = { ...report, behind: [...toWrite, ...untouched] };
 
 		if (applyBehind && report.behind.length > 0) {
-			const latest = cloneRelease(source, to);
-			try {
-				const want = new Map(plan.result.files.map((f) => [f.path, f.shardHash]));
-				for (const p of report.behind) {
-					const bytes = readFileSync(join(latest, p));
-					if (sha256(bytes) !== want.get(p)) fail(`${p} at v${to} does not match adopt's plan; nothing more was written`);
-					writeFileSync(join(vault, p), bytes);
+			if (toWrite.length > 0) {
+				const latest = cloneRelease(source, to);
+				try {
+					const want = new Map(plan.result.files.map((f) => [f.path, f.shardHash]));
+					for (const p of toWrite) {
+						const bytes = readFileSync(join(latest, p));
+						if (sha256(bytes) !== want.get(p)) fail(`${p} at v${to} does not match adopt's plan; nothing more was written`);
+						writeFileSync(join(vault, p), bytes);
+					}
+				} finally {
+					rmSync(latest, { recursive: true, force: true });
 				}
-			} finally {
-				rmSync(latest, { recursive: true, force: true });
 			}
-			process.stderr.write(`upgrade-plan: wrote v${to} of ${report.behind.length} behind file(s)\n`);
+			// Only after every write succeeded: the new AGENTS.md is in place.
+			for (const p of untouched) rmSync(join(vault, p));
+			process.stderr.write(
+				`upgrade-plan: wrote v${to} of ${toWrite.length} behind file(s), removed ${untouched.length} retired instruction file(s) you never edited\n`,
+			);
 		}
 	}
 
+	report = withRetiredInstructionFiles(report, (p) => existsSync(join(vault, p)));
+
 	process.stdout.write(
-		asJson ? `${JSON.stringify({ mode, from, to, report }, null, 2)}\n` : `${formatUpgradeReport(report, `v${from}`, `v${to}`)}\n`,
+		asJson
+			? `${JSON.stringify({ mode, from, to, report, settleFirst: settleFirst(report) }, null, 2)}\n`
+			: `${formatUpgradeReport(report, `v${from}`, `v${to}`)}\n`,
 	);
 }
 

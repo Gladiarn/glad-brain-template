@@ -7,7 +7,7 @@
 
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -17,6 +17,7 @@ import {
 	toFingerprintKey,
 	pickMarkers,
 	findLatestOpenFingerprint,
+	compareFingerprintKeys,
 	bumpPluginJsonVersion,
 	bumpShardYamlVersion,
 	PLUGIN_JSON,
@@ -146,7 +147,6 @@ describe("toFingerprintKey", () => {
 
 describe("pickMarkers", () => {
 	const GLOBS = [
-		"CLAUDE.md",
 		"AGENTS.md",
 		".mcp.json",
 		".claude/**",
@@ -427,5 +427,60 @@ describe("findLatestOpenFingerprint", () => {
 			"v3.7": { exists: ["c"] },
 		};
 		assert.equal(findLatestOpenFingerprint(fp), "v3.7");
+	});
+});
+
+describe("version detection across the AGENTS.md release (#321)", () => {
+	// The rule /om-vault-upgrade applies to a vault with no manifest version:
+	// a fingerprint matches when every `exists` path is there and no `missing`
+	// path is; the newest match wins. Run here against the real manifest and
+	// this repo's own tree, so the entries the release depends on are pinned.
+	// Only the fingerprints up to v10.0 take part, and v10.0's own `missing`
+	// is ignored: a later release adds both, and neither changes how a v9.1
+	// or v10.0 vault is told apart.
+	type Fp = { exists: string[]; missing?: string[] };
+	const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..");
+	const all = (
+		JSON.parse(readFileSync(join(repoRoot, "vault-manifest.json"), "utf-8")) as { version_fingerprints: Record<string, Fp> }
+	).version_fingerprints;
+	const fingerprints: Record<string, Fp> = Object.fromEntries(
+		Object.entries(all)
+			.filter(([key]) => compareFingerprintKeys(key, "v10.0") <= 0)
+			.map(([key, fp]) => [key, key === "v10.0" ? { exists: fp.exists } : fp]),
+	);
+	/** This repo's tree, with some paths forced present or absent. */
+	const vault = (overrides: Record<string, boolean>) => (p: string) =>
+		p in overrides ? overrides[p]! : existsSync(join(repoRoot, p));
+	const detect = (has: (p: string) => boolean): string | null => {
+		let best: string | null = null;
+		for (const [key, fp] of Object.entries(fingerprints)) {
+			if (!fp.exists.every(has) || (fp.missing ?? []).some(has)) continue;
+			if (best === null || compareFingerprintKeys(key, best) > 0) best = key;
+		}
+		return best;
+	};
+	const RULES = [".claude/rules/skills.md", ".claude/rules/subagents.md", ".claude/rules/memory.md", ".claude/rules/hooks-and-mod.md"];
+	const without = (paths: readonly string[]) => Object.fromEntries(paths.map((p) => [p, false]));
+
+	test("a v10 vault reads as v10.0", () => {
+		assert.equal(detect(vault({ "CLAUDE.md": false, "GEMINI.md": false })), "v10.0");
+	});
+
+	test("a v10 vault with a leftover CLAUDE.md (the case the upgrade guards target) still reads as v10.0", () => {
+		assert.equal(detect(vault({ "CLAUDE.md": true })), "v10.0");
+	});
+
+	test("a v9.1 vault, with CLAUDE.md and GEMINI.md and no .claude/rules/, reads as v9.1", () => {
+		assert.equal(detect(vault({ ...without(RULES), "CLAUDE.md": true, "GEMINI.md": true })), "v9.1");
+	});
+
+	test("the newest fingerprint in the manifest is the open one, so the next release can close it", () => {
+		const newest = Object.keys(all).sort(compareFingerprintKeys).at(-1);
+		assert.equal(findLatestOpenFingerprint(all), newest);
+	});
+
+	test("v9.1 is closed by a v10.0 marker, so the two never both match", () => {
+		const v91 = all["v9.1"]!;
+		assert.ok(v91.missing?.some((p) => all["v10.0"]!.exists.includes(p)), "v9.1's missing must name a file v10.0 requires");
 	});
 });

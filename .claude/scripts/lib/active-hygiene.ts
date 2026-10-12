@@ -29,6 +29,11 @@
  *      by /om-intake; raw exports sitting there are unprocessed by
  *      definition.
  *
+ *   6. LEFTOVER CLAUDE.md (#321) — AGENTS.md is the one instruction file,
+ *      and Claude Code reads a CLAUDE.md beside it instead, silently. An
+ *      update keeps a CLAUDE.md the user edited, so this says so until the
+ *      user's additions are moved to .claude/rules/ and the file is gone.
+ *
  * Philosophy: pattern-based, no LLM, conservative. This NUDGES — it never
  * moves files. False negatives (missing a cluster) are preferable to false
  * positives (nagging about unrelated notes), so the cluster detector leans
@@ -37,8 +42,17 @@
  * topic.
  */
 
-import { readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync, type Dirent } from "node:fs";
 import { join } from "node:path";
+import {
+	AGENTS_MD_FLAG_BYTES,
+	CLAUDE_MD,
+	GEMINI_MD,
+	GEMINI_SETTINGS,
+	INSTRUCTION_FILE,
+	isRetiredInstructionFile,
+	RETIRED_INSTRUCTION_FILES,
+} from "./instruction-files.ts";
 import { escapeRegex } from "./regex.ts";
 import { parsePromotedMarker, type PromotedRef } from "./memory-promoted.ts";
 import {
@@ -78,6 +92,15 @@ function titleTokens(filename: string): string[] {
 		.split(/[^a-z0-9]+/)
 		.filter((t) => t.length >= 4 && !/^\d+$/.test(t) && !STOPWORDS.has(t));
 }
+
+/**
+ * Numbers in the report that move with no new drift to act on: a note growing
+ * past the threshold, an item a day older. They stay in the message but not
+ * in the report's identity, and neither does the order they sort findings
+ * into (lib/report-key.ts), or a note the agent keeps appending to would
+ * re-show the Stop report every turn — the #252 repeat by another route.
+ */
+export const HYGIENE_VOLATILE_FIELDS: ReadonlySet<string> = new Set(["sizeKb", "ageDays", "oldestDays"]);
 
 export type TopicCluster = {
 	readonly token: string;
@@ -120,6 +143,13 @@ export type ActiveHygieneReport = {
 	readonly openLoops: readonly OpenLoop[];
 	readonly inboxPressure: InboxPressure | null;
 	readonly memoryInbox: MemoryInboxPressure | null;
+	/**
+	 * Retired instruction files at the vault root beside AGENTS.md that still go
+	 * wrong, in RETIRED_INSTRUCTION_FILES order (see LEFTOVER_HARM).
+	 */
+	readonly leftoverInstructionFiles: readonly string[];
+	/** AGENTS.md's size once it reaches AGENTS_MD_FLAG_BYTES, else null. `sizeKb`, so a report's identity ignores it (#252). */
+	readonly agentsMd: { readonly sizeKb: number } | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -407,9 +437,16 @@ function findOversizedNotes(
 			} else if (e.isFile() && isMarkdownFilename(e.name)) {
 				if (isMonolithExempt(e.name)) continue;
 				// Root-level infrastructure docs (README + translations,
-				// CLAUDE.md, …) are repo files, not vault notes — their bulk
+				// AGENTS.md, …) are repo files, not vault notes — their bulk
 				// is not a split candidate.
-				if (relDir === "" && isInfraFilename(e.name, infraRootFilenames))
+				// A retired instruction file is not a note either, whatever the
+				// manifest lists: left over beside AGENTS.md it has its own flag,
+				// which says to move it out, not to split it (#321).
+				if (
+					relDir === "" &&
+					(isInfraFilename(e.name, infraRootFilenames) ||
+						loadsAsRetiredInstructionFile(root, e.name))
+				)
 					continue;
 				try {
 					const size = statSync(join(root, rel)).size;
@@ -644,8 +681,99 @@ export function scanActiveHygiene(
 		openLoops: findOpenLoops(root, nowMs, openLoopConfig),
 		inboxPressure: findInboxPressure(root, nowMs),
 		memoryInbox: findMemoryInbox(root, memoryRoot, nowMs),
+		leftoverInstructionFiles: findLeftoverInstructionFiles(root),
+		agentsMd: agentsMdPastFlag(root),
 	};
 }
+
+/**
+ * A root file an agent loads as a retired instruction file: the exact name,
+ * or another casing that the filesystem resolves to that same file (Windows,
+ * macOS). On a case-sensitive filesystem a `claude.md` is a plain note, even
+ * beside a real CLAUDE.md, which is a different file there. Same file means
+ * the same real path, which also covers a CLAUDE.md symlinked to it; inode
+ * numbers are not used, as some filesystems report them as 0.
+ */
+function loadsAsRetiredInstructionFile(root: string, name: string): boolean {
+	if (!isRetiredInstructionFile(name)) return false;
+	if (RETIRED_INSTRUCTION_FILES.includes(name)) return true;
+	const real = realPath(join(root, name));
+	return (
+		real !== null &&
+		RETIRED_INSTRUCTION_FILES.some((f) => f.toLowerCase() === name.toLowerCase() && realPath(join(root, f)) === real)
+	);
+}
+
+function realPath(path: string): string | null {
+	try {
+		return realpathSync.native(path);
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * AGENTS.md's size once it reaches the flag. It is an infrastructure file, so
+ * the oversize scan never sees it, yet a user folding their additions into it
+ * can push it past where Antigravity stops reading, silently.
+ */
+function agentsMdPastFlag(root: string): { sizeKb: number } | null {
+	try {
+		const size = statSync(join(root, INSTRUCTION_FILE)).size;
+		return size >= AGENTS_MD_FLAG_BYTES ? { sizeKb: Math.round(size / 1000) } : null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Retired instruction files beside AGENTS.md that still go wrong. Without
+ * AGENTS.md the vault has not upgraded yet, and its old file still carries
+ * everything. A GEMINI.md counts only once Gemini's settings point it at
+ * AGENTS.md: before that, Gemini still reads GEMINI.md, and deleting it would
+ * cut Gemini off.
+ */
+function findLeftoverInstructionFiles(root: string): string[] {
+	if (!existsSync(join(root, INSTRUCTION_FILE))) return [];
+	return RETIRED_INSTRUCTION_FILES.filter(
+		(f) => existsSync(join(root, f)) && (f !== GEMINI_MD || geminiReadsAgentsMd(root)),
+	);
+}
+
+/** Whether .gemini/settings.json lists AGENTS.md in context.fileName. */
+function geminiReadsAgentsMd(root: string): boolean {
+	const names = geminiContextFiles(root);
+	return names.includes(INSTRUCTION_FILE) && !names.includes(GEMINI_MD);
+}
+
+/**
+ * The context files .gemini/settings.json names (context.fileName, a string
+ * or a list), or [] when there is none. Gemini accepts comments and a BOM in
+ * that file, so a strict JSON.parse is tried first and a narrow read of the
+ * fileName value second.
+ */
+function geminiContextFiles(root: string): string[] {
+	let text: string;
+	try {
+		text = readFileSync(join(root, GEMINI_SETTINGS), "utf8").replace(/^\uFEFF/, "");
+	} catch {
+		return [];
+	}
+	try {
+		const names = (JSON.parse(text) as { context?: { fileName?: unknown } }).context?.fileName;
+		return (Array.isArray(names) ? names : [names]).filter((n): n is string => typeof n === "string");
+	} catch {
+		const value = /"fileName"\s*:\s*(\[[^\]]*\]|"[^"]*")/.exec(text)?.[1] ?? "";
+		return [...value.matchAll(/"([^"]*)"/g)].map((m) => m[1]!);
+	}
+}
+
+/** What each retired file does wrong while it stays, and what to do about it. */
+const LEFTOVER_HARM: Readonly<Record<string, string>> = {
+	[CLAUDE_MD]: "Claude Code reads CLAUDE.md and skips AGENTS.md; move your additions to .claude/rules/ and delete it.",
+	[GEMINI_MD]:
+		"Gemini no longer reads GEMINI.md: .gemini/settings.json points it at AGENTS.md. Move anything you added there to AGENTS.md and delete it.",
+};
 
 /**
  * How many entries a hygiene list prints before "… and N more". The flag's
@@ -683,12 +811,16 @@ const claims = {
 	openLoops: (n: number) => `${n} note(s) with open follow-ups untouched ${OPEN_LOOP_DAYS}+ days`,
 	inbox: (n: number) => `${n} raw export(s) sitting in work/meetings/ for ${INBOX_PRESSURE_DAYS}+ days`,
 	memoryInbox: (n: number) => `${n} cross-repo memory capture(s) awaiting review`,
+	leftover: (file: string) => `${file} present beside AGENTS.md`,
+	agentsMd: (sizeKb: number) => `AGENTS.md is ${sizeKb}KB`,
 };
 
 /** The claim of every finding in `report`, in the order the formatter lists them. */
 export function hygieneClaims(report: ActiveHygieneReport): string[] {
-	const { completedInActive, ungroupedClusters, oversizedNotes, openLoops, inboxPressure, memoryInbox } = report;
+	const { completedInActive, ungroupedClusters, oversizedNotes, openLoops, inboxPressure, memoryInbox, leftoverInstructionFiles, agentsMd } = report;
 	const out: string[] = [];
+	for (const file of leftoverInstructionFiles) out.push(claims.leftover(file));
+	if (agentsMd !== null) out.push(claims.agentsMd(agentsMd.sizeKb));
 	if (completedInActive.length > 0) out.push(claims.completed(completedInActive.length));
 	if (ungroupedClusters.length > 0) out.push(claims.clusters());
 	if (oversizedNotes.length > 0) out.push(claims.oversized(oversizedNotes.length));
@@ -710,6 +842,8 @@ export function formatActiveHygiene(report: ActiveHygieneReport): string[] {
 		openLoops,
 		inboxPressure,
 		memoryInbox,
+		leftoverInstructionFiles,
+		agentsMd,
 	} = report;
 	if (
 		completedInActive.length === 0 &&
@@ -717,11 +851,28 @@ export function formatActiveHygiene(report: ActiveHygieneReport): string[] {
 		oversizedNotes.length === 0 &&
 		openLoops.length === 0 &&
 		inboxPressure === null &&
-		memoryInbox === null
+		memoryInbox === null &&
+		leftoverInstructionFiles.length === 0 &&
+		agentsMd === null
 	) {
 		return [];
 	}
 	const lines: string[] = [];
+
+	// First: until they are gone, an agent reads none of the rest of the
+	// conventions this vault ships in AGENTS.md, or loses what the user added.
+	for (const file of leftoverInstructionFiles) {
+		if (lines.length > 0) lines.push("");
+		const harm = LEFTOVER_HARM[file] ?? "it is a retired instruction file; move anything you added there to AGENTS.md and delete it.";
+		lines.push(`⚠️  ${claims.leftover(file)} — ${harm}`);
+	}
+
+	if (agentsMd !== null) {
+		if (lines.length > 0) lines.push("");
+		lines.push(
+			`⚠️  ${claims.agentsMd(agentsMd.sizeKb)} — Antigravity stopped reading it at ~24,000 bytes, silently, and Codex at ~32 KiB (Antigravity 1.3.0, Codex CLI 0.160.0, measured 2026-10-06, #321). Keep it under 23KB. Move a section an agent can safely skip to a file it reads on demand, word for word, and leave a one-line pointer; Claude Code-only additions go to .claude/rules/.`,
+		);
+	}
 
 	if (completedInActive.length > 0) {
 		lines.push(

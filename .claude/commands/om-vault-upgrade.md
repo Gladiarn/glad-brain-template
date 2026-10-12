@@ -46,6 +46,8 @@ It then prints every file needing judgment, sorted into:
 | **Merged** | Changed on both sides, merged cleanly | Show the user the result to review |
 | **Conflicts** | Changed on both sides, or a new template file where you already have one | The user decides per file |
 | **New in the template** | Added | Taken as is |
+| **Move out** | A retired instruction file (`CLAUDE.md`, `GEMINI.md`) still in the vault | Claude Code reads a `CLAUDE.md` and skips `AGENTS.md`; Gemini no longer reads a `GEMINI.md`, so what the user added there is lost. With the user, move what they added: from `GEMINI.md` into `AGENTS.md`; from `CLAUDE.md` into `.claude/rules/local.md` (Claude Code only) or `AGENTS.md` (every agent; keep it under 23 KB, where the hygiene scan flags it: Antigravity stops reading at ~24,000 bytes), then delete it. Nothing is merged automatically |
+| **Settle these first** | Shown above the lists when `AGENTS.md` or `.gemini/settings.json` is a conflict while `CLAUDE.md` or `GEMINI.md` retires (`settleFirst` in `--json`) | The old `AGENTS.md` only points at `CLAUDE.md`, and old Gemini settings send Gemini to `GEMINI.md`, which does the same. Resolve each to the release's version and re-add the user's changes; otherwise a managed update deletes an untouched `CLAUDE.md` and leaves agents without conventions |
 
 Show the report to the user. With `--dry-run`, stop here.
 
@@ -57,8 +59,12 @@ ShardMind executes only through its terminal UI (`--json` works with `--dry-run`
 - **No conflicts:** `CI=true shardmind update --yes < /dev/null`. `--yes` auto-keeps your version wherever both sides changed, so it is safe only once the plan shows no conflicts.
 - **Conflicts:** ask the user to run `! shardmind update` themselves and decide each conflicting file in the prompt, or in their editor.
 
+**Order:** if the plan says *Settle these first*, each listed file is a conflict, so the update runs through the user's own `! shardmind update` (or `decide-per-file` adopt): resolve each there to the release's version, re-adding the user's changes. A managed update deletes an untouched `CLAUDE.md` or `GEMINI.md` in that same run; an unmanaged clone keeps them until these are settled.
+
+**A Move out file the user changed:** the interactive `shardmind update` asks whether to keep or delete it, because the release removed it. Tell the user to answer **keep**: deleting it there loses their additions. Once the update is done, move the additions as U1 says, then delete the file.
+
 **Cloned without ShardMind:**
-1. Write the new release's bytes for the **behind** files only. Each is checked against adopt's plan before it is written, so nothing you changed is touched:
+1. Write the new release's bytes for the **behind** files only. Each is checked against adopt's plan before it is written, so nothing you changed is touched. A `CLAUDE.md` or `GEMINI.md` listed as behind is one you never edited, and this step **deletes** it, after the new `AGENTS.md` is written: name it to the user and get their yes before running it:
    ```bash
    node --experimental-strip-types .claude/scripts/upgrade-plan.ts --apply-behind
    ```
@@ -113,6 +119,7 @@ Glob all `.md`, `.base`, `.canvas` files and binary files (images, PDFs) in the 
 | `.claude/commands/` not in template | **MERGE** | `.claude/commands/` (user addition) |
 | `.claude/agents/` not in template | **MERGE** | `.claude/agents/` (user addition) |
 | `.claude/scripts/` not in template | **MERGE** | `.claude/scripts/` (user addition) |
+| `.claude/rules/` not in template | **MERGE** | `.claude/rules/` (user addition, such as `local.md` or a section moved out of `AGENTS.md`; its `AGENTS.md` pointer comes with the user's `AGENTS.md` additions) |
 | `scaffold` path with real content | **REPLACE** | Same path in target |
 | `scaffold` path with stub-only content | **SKIP** | Template stub is fine |
 | `user_content_roots` glob | **COPY** | Same relative path |
@@ -177,7 +184,7 @@ Transformations:
 **Conflict section** (if any):
 ```
 ⚠ Conflicts requiring your input:
-  - source has customized CLAUDE.md (will NOT copy — differences logged)
+  - source has a CLAUDE.md (will NOT copy — its additions are listed for .claude/rules/local.md or AGENTS.md)
   - source has .claude/commands/my-custom.md (will MERGE as user addition)
 ```
 
@@ -224,14 +231,14 @@ Migration complete.
 Offer next steps:
 - "Run `/om-vault-audit` for a full structural check"
 - "Review `thinking/migrate-review/` for uncategorized files"
-- "Check `brain/Migration Log.md` for the full receipt and CLAUDE.md diff"
+- "Check `brain/Migration Log.md` for the full receipt and the source CLAUDE.md's additions to fold in"
 
 ## Important
 
 - **The source vault is NEVER modified.** All operations are read-only on the source, write-only on the target.
 - **Plan-first, always.** Never skip the plan presentation step, even if the migration looks simple.
 - **Preserve user curation.** When rebuilding indexes, start from the source's version (which has the user's ordering and groupings), then append missing entries. Don't regenerate from scratch.
-- **CLAUDE.md is special.** Never copy it from the source. The template's CLAUDE.md is always authoritative. If the source has customizations, diff them and log the differences so the user can re-apply manually.
+- **CLAUDE.md is user content, and never copied as CLAUDE.md.** A `CLAUDE.md` at the vault root makes Claude Code skip `AGENTS.md`, the template's one instruction file. If the source has one, diff it against the template's `AGENTS.md` and `.claude/rules/`, and log what it adds so the user can fold each addition into `.claude/rules/local.md` (Claude Code only) or `AGENTS.md` (every agent). Nothing is merged automatically.
 - **Binary files matter.** Images, PDFs, and attachments embedded in notes must be copied or the embeds break.
 - **Wikilinks resolve by filename.** Most folder moves don't break links. Only renames and full-path links need fixing.
 - **Markdown links get converted.** Standard markdown links to local files (`[text](path.md)`) are converted to wikilinks (`[[name|text]]`). External URLs are left as-is.

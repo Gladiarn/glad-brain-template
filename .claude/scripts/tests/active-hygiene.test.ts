@@ -8,9 +8,12 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import {
+	existsSync,
 	mkdirSync,
+	readdirSync,
 	mkdtempSync,
 	rmSync,
+	symlinkSync,
 	utimesSync,
 	writeFileSync,
 } from "node:fs";
@@ -18,6 +21,7 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import {
 	HYGIENE_LIST_CAP,
+	HYGIENE_VOLATILE_FIELDS,
 	MONOLITH_BYTES,
 	OPEN_LOOP_DAYS,
 	countOpenLoops,
@@ -33,6 +37,8 @@ import {
 	walkMarkdown,
 } from "../lib/active-hygiene.ts";
 
+import { AGENTS_MD_FLAG_BYTES, AGENTS_MD_MAX_BYTES } from "../lib/instruction-files.ts";
+import { reportKey } from "../lib/report-key.ts";
 import { rmTemp } from "./_helpers.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -426,6 +432,8 @@ describe("scanActiveHygiene — detectors", () => {
 			openLoops: [],
 			inboxPressure: null,
 			memoryInbox: { count: 4, oldestDays: 2, namedOnly: 0 },
+			leftoverInstructionFiles: [],
+			agentsMd: null,
 		});
 		const text = lines.join("\n");
 		assert.match(text, /COPYING it/);
@@ -446,6 +454,8 @@ describe("scanActiveHygiene — detectors", () => {
 				openLoops: [],
 				inboxPressure: null,
 				memoryInbox: null,
+				leftoverInstructionFiles: [],
+				agentsMd: null,
 			});
 		const atCap = report(HYGIENE_LIST_CAP);
 		assert.equal(atCap.filter((l) => l.startsWith("   - ")).length, 3 * HYGIENE_LIST_CAP);
@@ -539,6 +549,8 @@ describe("formatActiveHygiene", () => {
 			openLoops: [{ path: "work/1-1/A 2026-01-01.md", ageDays: 20, openItems: 2 }],
 			inboxPressure: null,
 			memoryInbox: null,
+			leftoverInstructionFiles: [],
+			agentsMd: null,
 		});
 		const text = lines.join("\n");
 		assert.match(text, /marked done but still in active\//);
@@ -573,5 +585,197 @@ describe("open loops — a capped list keeps its membership as time passes", () 
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
+	});
+});
+
+describe("leftover CLAUDE.md beside AGENTS.md (#321)", () => {
+	// A vault upgraded past the single-instruction-file release keeps a
+	// CLAUDE.md the user edited (their bytes survive the update). Claude Code
+	// then reads CLAUDE.md and silently skips AGENTS.md, so the hygiene scan
+	// says so at every session boundary until it is moved out.
+	const withFiles = (names: readonly string[], run: (root: string) => void): void => {
+		const root = mkdtempSync(join(tmpdir(), "leftover-claude-md-"));
+		try {
+			for (const n of names) writeFileSync(join(root, n), "# Vault\n");
+			run(root);
+		} finally {
+			rmTemp(root);
+		}
+	};
+
+	test("flags a CLAUDE.md sitting beside AGENTS.md, with what to do about it", () => {
+		withFiles(["AGENTS.md", "CLAUDE.md"], (root) => {
+			const report = scanActiveHygiene(root, NOW, DEFAULTS);
+			assert.equal(report.leftoverInstructionFiles.includes("CLAUDE.md"), true);
+			const text = formatActiveHygiene(report).join("\n");
+			assert.match(
+				text,
+				/CLAUDE\.md present beside AGENTS\.md — Claude Code reads CLAUDE\.md and skips AGENTS\.md; move your additions to \.claude\/rules\/ and delete it\./,
+			);
+		});
+	});
+
+	/** Write .gemini/settings.json with the given context.fileName (or none). */
+	const geminiSettings = (root: string, fileName?: string[]): void => {
+		mkdirSync(join(root, ".gemini"), { recursive: true });
+		writeFileSync(join(root, ".gemini/settings.json"), JSON.stringify(fileName ? { context: { fileName } } : { hooks: {} }));
+	};
+
+	test("flags a GEMINI.md beside AGENTS.md once Gemini's settings point it at AGENTS.md, so GEMINI.md is never loaded", () => {
+		withFiles(["AGENTS.md", "GEMINI.md"], (root) => {
+			geminiSettings(root, ["AGENTS.md"]);
+			const report = scanActiveHygiene(root, NOW, DEFAULTS);
+			assert.deepEqual(report.leftoverInstructionFiles, ["GEMINI.md"], "a GEMINI.md is not a leftover CLAUDE.md");
+			assert.match(formatActiveHygiene(report).join("\n"), /GEMINI\.md present beside AGENTS\.md — Gemini no longer reads GEMINI\.md/);
+		});
+		withFiles(["AGENTS.md", "CLAUDE.md"], (root) => {
+			geminiSettings(root, ["AGENTS.md"]);
+			assert.deepEqual(scanActiveHygiene(root, NOW, DEFAULTS).leftoverInstructionFiles, ["CLAUDE.md"]);
+		});
+	});
+
+	test("silent about a GEMINI.md that Gemini still reads: its settings name no AGENTS.md, or there are none", () => {
+		// A vault that kept its own older settings: Gemini reads GEMINI.md as its
+		// only context file, so telling the user to delete it would cut Gemini off.
+		withFiles(["AGENTS.md", "GEMINI.md"], (root) => {
+			geminiSettings(root);
+			assert.deepEqual(scanActiveHygiene(root, NOW, DEFAULTS).leftoverInstructionFiles, []);
+		});
+		withFiles(["AGENTS.md", "GEMINI.md"], (root) => {
+			geminiSettings(root, ["GEMINI.md"]);
+			assert.deepEqual(scanActiveHygiene(root, NOW, DEFAULTS).leftoverInstructionFiles, []);
+		});
+		withFiles(["AGENTS.md", "GEMINI.md"], (root) => {
+			assert.deepEqual(scanActiveHygiene(root, NOW, DEFAULTS).leftoverInstructionFiles, []);
+		});
+		// Both named: Gemini loads GEMINI.md as well, so it is not a leftover.
+		withFiles(["AGENTS.md", "GEMINI.md"], (root) => {
+			geminiSettings(root, ["AGENTS.md", "GEMINI.md"]);
+			assert.deepEqual(scanActiveHygiene(root, NOW, DEFAULTS).leftoverInstructionFiles, []);
+		});
+	});
+
+	test("Gemini settings with comments or a BOM, which Gemini accepts, are still read", () => {
+		withFiles(["AGENTS.md", "GEMINI.md"], (root) => {
+			mkdirSync(join(root, ".gemini"), { recursive: true });
+			writeFileSync(
+				join(root, ".gemini/settings.json"),
+				'﻿{\n  // where Gemini looks\n  "context": { "fileName": ["AGENTS.md"] },\n  /* hooks */ "hooks": {}\n}\n',
+			);
+			assert.deepEqual(scanActiveHygiene(root, NOW, DEFAULTS).leftoverInstructionFiles, ["GEMINI.md"]);
+		});
+	});
+
+	test("silent with AGENTS.md alone", () => {
+		withFiles(["AGENTS.md"], (root) => {
+			const report = scanActiveHygiene(root, NOW, DEFAULTS);
+			assert.equal(report.leftoverInstructionFiles.includes("CLAUDE.md"), false);
+			assert.deepEqual(formatActiveHygiene(report), []);
+		});
+	});
+
+	test("a large leftover CLAUDE.md is the leftover flag only, never a note to SPLIT", () => {
+		// CLAUDE.md left the manifest's infrastructure list in the same release,
+		// so the root-infra exemption no longer covers it. Telling the user to
+		// split a file the other flag says to move out and delete would be two
+		// contradictory instructions about one file.
+		withFiles(["AGENTS.md"], (root) => {
+			writeFileSync(join(root, "CLAUDE.md"), "x".repeat(MONOLITH_BYTES + 1000));
+			const report = scanActiveHygiene(root, NOW, DEFAULTS, ["AGENTS.md"]);
+			assert.equal(report.leftoverInstructionFiles.includes("CLAUDE.md"), true);
+			assert.deepEqual(report.oversizedNotes, []);
+		});
+	});
+
+	test("a differently cased claude.md flags exactly where the filesystem resolves it as CLAUDE.md", () => {
+		// Windows and macOS resolve names case-insensitively, so Claude Code
+		// finds a `claude.md` there as CLAUDE.md, and the flag must say so; on
+		// a case-sensitive filesystem neither finds it.
+		withFiles(["AGENTS.md", "claude.md"], (root) => {
+			const resolves = existsSync(join(root, "CLAUDE.md"));
+			assert.equal(scanActiveHygiene(root, NOW, DEFAULTS).leftoverInstructionFiles.includes("CLAUDE.md"), resolves);
+		});
+	});
+
+	test("a large claude.md is the leftover flag where it resolves as CLAUDE.md, and an oversized note where it does not", () => {
+		withFiles(["AGENTS.md"], (root) => {
+			writeFileSync(join(root, "claude.md"), "x".repeat(MONOLITH_BYTES + 1000));
+			const report = scanActiveHygiene(root, NOW, DEFAULTS, ["AGENTS.md"]);
+			if (existsSync(join(root, "CLAUDE.md"))) {
+				// Windows, macOS: Claude Code loads it, so it is a leftover, never a note to split.
+				assert.equal(report.leftoverInstructionFiles.includes("CLAUDE.md"), true);
+				assert.deepEqual(report.oversizedNotes, []);
+			} else {
+				// A case-sensitive filesystem: no agent loads it, so it is a plain note, and still seen.
+				assert.equal(report.leftoverInstructionFiles.includes("CLAUDE.md"), false);
+				assert.deepEqual(report.oversizedNotes.map((n) => n.path), ["claude.md"]);
+			}
+		});
+	});
+
+	test("AGENTS.md near where Antigravity stops reading is flagged, with the agent that cuts it off", () => {
+		withFiles([], (root) => {
+			writeFileSync(join(root, "AGENTS.md"), "x".repeat(AGENTS_MD_FLAG_BYTES));
+			const report = scanActiveHygiene(root, NOW, DEFAULTS, ["AGENTS.md"]);
+			assert.deepEqual(report.agentsMd, { sizeKb: 23 });
+			assert.match(formatActiveHygiene(report).join("\n"), /AGENTS\.md is 23KB[\s\S]*Antigravity stopped reading it at ~24,000 bytes/);
+		});
+		withFiles([], (root) => {
+			writeFileSync(join(root, "AGENTS.md"), "x".repeat(AGENTS_MD_FLAG_BYTES - 1));
+			assert.equal(scanActiveHygiene(root, NOW, DEFAULTS, ["AGENTS.md"]).agentsMd, null);
+		});
+	});
+
+	test("a vault's AGENTS.md has room to grow past the template's own cap before it is flagged", () => {
+		// The template's test holds the shipped file under AGENTS_MD_MAX_BYTES;
+		// the vault flag sits nearer the measured cutoff (byte 23,860 was still
+		// read), so a user's first additions are not a finding.
+		assert.ok(AGENTS_MD_FLAG_BYTES >= AGENTS_MD_MAX_BYTES + 1000);
+		assert.ok(AGENTS_MD_FLAG_BYTES < 23_860);
+	});
+
+	test("editing an AGENTS.md that is already flagged is not a new finding (#252)", () => {
+		const keyAt = (bytes: number) =>
+			withScan(bytes, (report) => reportKey({ report }, HYGIENE_VOLATILE_FIELDS));
+		const withScan = <T,>(bytes: number, run: (r: ReturnType<typeof scanActiveHygiene>) => T): T => {
+			let out!: T;
+			withFiles([], (root) => {
+				writeFileSync(join(root, "AGENTS.md"), "x".repeat(bytes));
+				out = run(scanActiveHygiene(root, NOW, DEFAULTS, ["AGENTS.md"]));
+			});
+			return out;
+		};
+		assert.equal(keyAt(AGENTS_MD_FLAG_BYTES + 10), keyAt(AGENTS_MD_FLAG_BYTES + 900));
+		assert.notEqual(keyAt(AGENTS_MD_FLAG_BYTES - 1), keyAt(AGENTS_MD_FLAG_BYTES + 10));
+	});
+
+	test("a CLAUDE.md symlinked to a large claude.md is the leftover flag only, never a note to SPLIT", () => {
+		withFiles(["AGENTS.md"], (root) => {
+			writeFileSync(join(root, "claude.md"), "x".repeat(MONOLITH_BYTES + 1000));
+			try {
+				symlinkSync("claude.md", join(root, "CLAUDE.md"));
+			} catch {
+				return; // no symlink rights (Windows without developer mode), or the name is taken (case-insensitive)
+			}
+			const report = scanActiveHygiene(root, NOW, DEFAULTS, ["AGENTS.md"]);
+			assert.equal(report.leftoverInstructionFiles.includes("CLAUDE.md"), true);
+			assert.deepEqual(report.oversizedNotes, []);
+		});
+	});
+
+	test("on a case-sensitive filesystem, a claude.md beside a real CLAUDE.md is still a note that can be oversized", () => {
+		withFiles(["AGENTS.md", "CLAUDE.md"], (root) => {
+			writeFileSync(join(root, "claude.md"), "x".repeat(MONOLITH_BYTES + 1000));
+			const caseSensitive = readdirSync(root).includes("claude.md") && readdirSync(root).includes("CLAUDE.md");
+			if (!caseSensitive) return; // Windows, macOS: the write above went to CLAUDE.md itself
+			const report = scanActiveHygiene(root, NOW, DEFAULTS, ["AGENTS.md"]);
+			assert.deepEqual(report.oversizedNotes.map((n) => n.path), ["claude.md"]);
+		});
+	});
+
+	test("silent for a vault that has not upgraded yet (CLAUDE.md, no AGENTS.md)", () => {
+		withFiles(["CLAUDE.md"], (root) => {
+			assert.equal(scanActiveHygiene(root, NOW, DEFAULTS).leftoverInstructionFiles.includes("CLAUDE.md"), false);
+		});
 	});
 });
