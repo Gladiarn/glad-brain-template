@@ -1,5 +1,18 @@
 # Changelog
 
+## v10.0.0 — 2026-10-12
+
+### Added
+- make AGENTS.md the single instruction file
+
+### Changed
+- say which issues are open for contributions, and require imperative PR titles
+
+### Fixed
+- honor camelCase Stop hook re-entry flags
+- build the mod report preface from the mod's name
+- find frontmatter by its delimiter lines, not every ---
+
 ## v9.1.0 — 2026-10-06
 
 ### Added
