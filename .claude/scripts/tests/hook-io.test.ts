@@ -7,7 +7,7 @@
 import { test, describe, afterEach } from "node:test";
 import assert from "node:assert/strict";
 
-import { debug, fitEncoded, HOOK_OUTPUT_MAX_CHARS, warn, writeHookOutput, writeStopFeedback, writeSystemMessage, type PolicyResult } from "../lib/hook-io.ts";
+import { debug, envelopedLimit, fitEncoded, fitWithMeter, HOOK_OUTPUT_MAX_CHARS, parseHookContext, warn, writeHookOutput, writeStopFeedback, writeSystemMessage, type PolicyResult } from "../lib/hook-io.ts";
 
 /**
  * Replace process.stderr.write with a capturer that records calls and returns
@@ -194,6 +194,87 @@ describe("writeHookOutput — additionalContext fits the hook output cap (#254)"
 	});
 });
 
+describe("envelopedLimit and fitWithMeter's json unit — a context sent inside the envelope (#340)", () => {
+	const meter = (cut: boolean) => (cut ? "_context injected: cut_" : "_context injected_");
+
+	test("a context fitted to the SessionStart limit stays within the cap once enveloped, meter last", () => {
+		// Newlines and quotes escape to two characters each: an ASCII body that
+		// fits the cap raw is over it once encoded, which a raw count would miss.
+		const body = Array.from({ length: 2_000 }, (_, i) => `- "item" ${i}\n`).join("");
+		const context = fitWithMeter(body, meter, envelopedLimit("SessionStart"));
+		const out = captureStdout(() => writeHookOutput("SessionStart", context));
+		assert.ok(out.length <= HOOK_OUTPUT_MAX_CHARS, `stdout is ${out.length} characters`);
+		const carried = (JSON.parse(out) as { hookSpecificOutput: { additionalContext: string } }).hookSpecificOutput.additionalContext;
+		assert.equal(carried, context, "writeHookOutput did not cut it again");
+		assert.match(carried, /_context injected: cut_\n$/);
+	});
+
+	test("a body that fits the limit raw but not encoded is cut, not passed whole", () => {
+		const limit = envelopedLimit("SessionStart");
+		// Every character a quote: raw it is under the limit, encoded about twice it.
+		const body = '"'.repeat(limit.max - 200);
+		const context = fitWithMeter(body, meter, limit);
+		assert.ok(JSON.stringify(context).length <= limit.max, `encoded ${JSON.stringify(context).length} of ${limit.max}`);
+		assert.match(context, /_context injected: cut_\n$/, "the cut is in the meter");
+	});
+
+	test("the meter is handed the size in the caller's measure, the one its budget decided on", () => {
+		const seen: number[] = [];
+		const encoded = (t: string) => JSON.stringify(t).length;
+		fitWithMeter('a"b\n', (_cut, size) => (seen.push(size), "_m_"), envelopedLimit("SessionStart"), encoded);
+		assert.deepEqual(seen, [encoded('a"b\n')], "not the UTF-8 bytes");
+	});
+
+	test("the json cut never splits an emoji", () => {
+		const body = "😀".repeat(6_000);
+		const context = fitWithMeter(body, meter, envelopedLimit("SessionStart"));
+		assert.doesNotMatch(context, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/, "a lone high surrogate");
+		assert.ok(JSON.stringify(context).length <= envelopedLimit("SessionStart").max);
+	});
+
+	test("an output exactly at the limit once encoded passes whole; one character more is cut", () => {
+		const limit = envelopedLimit("SessionStart");
+		// The whole output is `${body}\n${meter}\n`: solve for the body that lands
+		// on max, quotes (two encoded characters each) plus one "x" for an odd room.
+		const room = limit.max - 2 - (JSON.stringify(`\n${meter(false)}\n`).length - 2);
+		const body = "x".repeat(room % 2) + '"'.repeat(Math.floor(room / 2));
+		const whole = fitWithMeter(body, meter, limit);
+		assert.equal(JSON.stringify(whole).length, limit.max);
+		assert.match(whole, /_context injected_\n$/, "not cut");
+		assert.match(fitWithMeter(body + "x", meter, limit), /_context injected: cut_\n$/);
+	});
+
+	test("an emoji straddling the cut after an ASCII prefix is dropped whole, on every alignment", () => {
+		const limit = envelopedLimit("SessionStart");
+		for (let pad = 0; pad < 4; pad++) {
+			const body = "x".repeat(limit.max - 500 + pad) + "😀".repeat(400);
+			const context = fitWithMeter(body, meter, limit);
+			assert.doesNotMatch(context, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/, `a lone high surrogate at pad ${pad}`);
+			assert.ok(JSON.stringify(context).length <= limit.max, `pad ${pad}`);
+		}
+	});
+
+	test("a meter too long for the limit on its own is cut to the limit, its newline counted as encoded", () => {
+		for (const max of [10, 11, 20, 21]) {
+			const limit = { max, unit: "json" as const, name: "a tiny limit" };
+			const out = fitWithMeter("body", () => "m".repeat(100), limit);
+			assert.ok(JSON.stringify(out).length <= max, `max ${max}: encoded ${JSON.stringify(out).length}`);
+		}
+	});
+
+	test("without a measure, the meter is sized in the limit's own unit", () => {
+		const seen: number[] = [];
+		fitWithMeter('a"b\n', (_cut, size) => (seen.push(size), "_m_"), envelopedLimit("SessionStart"));
+		assert.deepEqual(seen, [JSON.stringify('a"b\n').length]);
+	});
+
+	test("CRLF bodies are measured as encoded, carriage returns included", () => {
+		const body = "line\r\n".repeat(3_000);
+		const context = fitWithMeter(body, meter, envelopedLimit("SessionStart"));
+		assert.ok(JSON.stringify(context).length <= envelopedLimit("SessionStart").max);
+	});
+});
+
 describe("writeStopReportData", () => {
 	test("a report too large for one pipe write arrives whole", async () => {
 		const { spawnSync } = await import("node:child_process");
@@ -230,5 +311,24 @@ describe("writeStopReportData on a pipe that writes in parts", () => {
 			throw Object.assign(new Error("closed"), { code: "EPIPE" });
 		};
 		assert.throws(() => writeStopReportData({ key: "k", claims: [], agentText: "t" }, write), /closed/);
+	});
+});
+
+describe("parseHookContext — the context a hook-path envelope carries (#340)", () => {
+	test("returns additionalContext from an envelope for the named event", () => {
+		const stdout = JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: "## Session Context\n" } });
+		assert.equal(parseHookContext(stdout, "SessionStart"), "## Session Context\n");
+	});
+
+	test("plain text is refused by name, not with a bare JSON SyntaxError", () => {
+		assert.throws(() => parseHookContext("## Session Context\n", "SessionStart"), /not one JSON object/);
+	});
+
+	test("an envelope for another event, or with no string context, is refused", () => {
+		const stop = JSON.stringify({ hookSpecificOutput: { hookEventName: "Stop", additionalContext: "x" } });
+		assert.throws(() => parseHookContext(stop, "SessionStart"), /not a SessionStart envelope/);
+		const empty = JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart" } });
+		assert.throws(() => parseHookContext(empty, "SessionStart"), /not a SessionStart envelope/);
+		assert.throws(() => parseHookContext("null", "SessionStart"), /not a SessionStart envelope/);
 	});
 });

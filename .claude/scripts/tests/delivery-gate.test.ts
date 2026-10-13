@@ -11,6 +11,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	buildFixture,
+	contextOf,
+	flagConflict,
+	removeFixture,
 	countResults,
 	carries,
 	expectationTracker,
@@ -412,6 +415,12 @@ describe("delivery gate: self-test and environment", () => {
 		{ breakage: "startup-only" as const, verdicts: [v("at startup", startupOutcome), v("after /compact", "FAIL")] },
 	];
 
+	test("--self-test with --hooks-only is refused: the self-test breaks the mod, which --hooks-only never runs", () => {
+		assert.match(flagConflict(["--self-test", "--hooks-only"]) ?? "", /--self-test.*--hooks-only/);
+		assert.equal(flagConflict(["--hooks-only"]), null);
+		assert.equal(flagConflict(["--self-test"]), null);
+	});
+
 	test("the self-test passes only when every checkpoint fails and the startup-only control passes", () => {
 		assert.equal(selfTestOutcome(broken("PASS")).exitCode, 0);
 		assert.equal(selfTestOutcome(broken("FAIL")).exitCode, 1, "a control that failed means that copy never delivered");
@@ -468,6 +477,18 @@ describe("delivery gate: self-test and environment", () => {
 			assert.equal(readFileSync(join(foreign, "notes.md"), "utf8"), "mine", "nothing of the owner's is touched");
 		} finally {
 			rmSync(foreign, { recursive: true, force: true });
+		}
+	});
+
+	test("contextOf reads the hook path's context out of its JSON envelope, and deliver as plain text (#340)", () => {
+		const vault = buildFixture("none", { withMod: false, notes: 0 });
+		try {
+			const hooked = contextOf(vault, false);
+			assert.match(lastLine(hooked), /^_context injected: /, "the expectation is the meter, not the envelope's closing brace");
+			assert.ok(!hooked.trimStart().startsWith("{"), "not the raw JSON");
+			assert.match(lastLine(contextOf(vault, true)), /^_context injected: /);
+		} finally {
+			removeFixture(vault);
 		}
 	});
 

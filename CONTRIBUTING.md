@@ -159,6 +159,8 @@ node --experimental-strip-types .github/scripts/delivery-gate.ts --trusted-dir <
 node --experimental-strip-types .github/scripts/delivery-gate.ts --trusted-dir <that folder> --file-issue       # then: every checkpoint PASS
 ```
 
+For a change to the hook path alone (the settings hooks, not the mod), `--hooks-only` runs just the sessions without the mod; it cannot be combined with `--self-test`, which breaks the mod.
+
 A self-test that does not exit 0 means the gate is broken: fix it before trusting a normal run. A normal run that fails files an issue with `--file-issue`, and that version is not recommended until it is resolved. What counts as PASS, FAIL and INVALID, the exit codes, and why each `/compact` and `/clear` changes the vault first are documented at the top of `.github/scripts/delivery-gate.ts`.
 
 ## Questions?

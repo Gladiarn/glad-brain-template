@@ -27,6 +27,7 @@ import {
 	DEFAULT_INSTRUCTION_BUDGET_BYTES,
 	effectiveInjectionBudget,
 	INJECTION_CEILING_BYTES,
+	METER_HEADROOM,
 	parseListingCollapseThreshold,
 	DEFAULT_LISTING_COLLAPSE_THRESHOLD,
 	type BudgetSection,
@@ -51,7 +52,7 @@ import {
 	collectOpenTasks,
 } from "../lib/session-start.ts";
 
-import { cutLine, fitEncoded, fitWithMeter, HOOK_OUTPUT_LIMIT, HOOK_OUTPUT_MAX_CHARS, type OutputLimit } from "../lib/hook-io.ts";
+import { cutLine, envelopedLimit, fitEncoded, fitWithMeter, HOOK_OUTPUT_LIMIT, HOOK_OUTPUT_MAX_CHARS, type OutputLimit } from "../lib/hook-io.ts";
 const CUT_LINE = cutLine(HOOK_OUTPUT_LIMIT);
 import { rmTemp } from "./_helpers.ts";
 
@@ -1251,16 +1252,27 @@ describe("injectionMode", () => {
 });
 
 describe("the injection budget under the hook output cap (#254)", () => {
-	test("the ceiling leaves the meter its headroom under the hook output cap", () => {
-		assert.equal(INJECTION_CEILING_BYTES, 9_100);
+	test("the ceiling leaves the meter its headroom under the hook output cap, once the JSON envelope is counted (#340)", () => {
+		// The hook path sends the context inside an envelope, which takes its
+		// share of the cap: the ceiling must come from what the envelope leaves.
+		assert.equal(INJECTION_CEILING_BYTES, envelopedLimit("SessionStart").max - METER_HEADROOM);
+		// A ratchet on the value itself, so a wrong formula cannot pass by agreeing with itself.
+		assert.equal(INJECTION_CEILING_BYTES, 9_024);
 	});
 
+	test("the template's own manifest budget is under the ceiling: a fresh vault's meter never reports a clamp", () => {
+		const manifest = readFileSync(new URL("../../../vault-manifest.json", import.meta.url), "utf-8");
+		assert.equal(effectiveInjectionBudget(parseInjectionBudget(manifest)).clampedFrom, undefined);
+	});
+
+	const C = INJECTION_CEILING_BYTES;
+
 	const cases: ReadonlyArray<readonly [number | null, number, number | undefined]> = [
-		[80_000, 9_100, 80_000], // the old default: clamped, and reported
-		[9_101, 9_100, 9_101], // one over: clamped
-		[9_100, 9_100, undefined], // exactly the ceiling: kept as configured
+		[80_000, C, 80_000], // the old default: clamped, and reported
+		[C + 1, C, C + 1], // one over: clamped
+		[C, C, undefined], // exactly the ceiling: kept as configured
 		[4_000, 4_000, undefined], // under: kept
-		[null, 9_100, undefined], // unset: the ceiling, with nothing to report
+		[null, C, undefined], // unset: the ceiling, with nothing to report
 	];
 	for (const [configured, bytes, clampedFrom] of cases) {
 		test(`effectiveInjectionBudget(${String(configured)}) → ${bytes}${clampedFrom === undefined ? "" : " (clamped)"}`, () => {
@@ -1336,7 +1348,8 @@ describe("fitWithMeter", () => {
 		const body = "x\n".repeat(1_000);
 		const out = fitWithMeter(body, meter, chars(300));
 		const kept = out.slice(0, out.lastIndexOf("\n\n_meter") + 1);
-		assert.match(out, new RegExp(`_meter ${Buffer.byteLength(kept, "utf-8")} cut_\n$`));
+		// In the limit's own unit: characters here, so the marker's "…" counts once.
+		assert.match(out, new RegExp(`_meter ${kept.length} cut_\n$`));
 	});
 
 	test("a byte limit is measured in UTF-8 bytes, cuts on a line, and never splits a character", () => {

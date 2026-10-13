@@ -33,6 +33,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parseHookContext } from "../lib/hook-io.ts";
 import { REFRESH_SWITCH } from "../lib/qmd-refresh.ts";
 
 const SENTINEL_DIR = mkdtempSync(join(tmpdir(), "om-test-sentinel-"));
@@ -49,6 +50,14 @@ export type RunResult = {
 	readonly stderr: string;
 	readonly code: number;
 };
+
+/**
+ * The context a SessionStart hook-path run carried: its stdout is one JSON
+ * envelope, `{ hookSpecificOutput: { hookEventName: "SessionStart",
+ * additionalContext } }` (#340). Throws on anything else, so a test of the
+ * hook path can never pass on plain text.
+ */
+export const hookContext = (stdout: string): string => parseHookContext(stdout, "SessionStart");
 
 export function runScript(
 	scriptPath: string,

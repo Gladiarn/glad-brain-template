@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 
 import {
 	applyInjectionBudget,
+	enveloped,
 	formatInjectionSize,
 	goalHeadline,
 	northStarLadder,
@@ -28,7 +29,7 @@ import {
 	NORTH_STAR_POINTER,
 	type BudgetSection,
 } from "../lib/session-start.ts";
-import { runScript as spawnHook, rmTemp } from "./_helpers.ts";
+import { hookContext, runScript as spawnHook, rmTemp } from "./_helpers.ts";
 
 const bytes = (s: string): number => Buffer.byteLength(s, "utf-8");
 const render = (s: readonly BudgetSection[]): number =>
@@ -87,13 +88,16 @@ describe("applyInjectionBudget — the ladder", () => {
 		assert.deepEqual(overHeadlines.collapsed, ["North Star (current goals)"]);
 	});
 
-	test("a `fit` level is handed exactly the room its body may take", () => {
+	test("a `fit` level's predicate accepts a body that fills the budget exactly, and not one byte more", () => {
 		const fixed: BudgetSection = { header: "", body: "x".repeat(10), priority: 0 };
-		let handed = -1;
-		const s = ns("F".repeat(500), [{ name: "top-N", fit: (room) => ((handed = room), "t".repeat(room)) }]);
+		const longest = (fits: (body: string) => boolean) => {
+			let n = 0;
+			while (fits("t".repeat(n + 1))) n++;
+			return n > 0 ? "t".repeat(n) : null;
+		};
+		const s = ns("F".repeat(500), [{ name: "top-N", fit: longest }]);
 		const r = applyInjectionBudget([fixed, s], 200);
-		assert.equal(r.bytes, 200, "a body of exactly the room handed fills the budget to the byte");
-		assert.equal(handed, 200 - render([fixed, { ...s, body: "" }]));
+		assert.equal(r.bytes, 200, "the longest body the predicate accepts fills the budget to the byte");
 		assert.deepEqual(r.degraded, [{ section: "North Star (current goals)", level: "top-N" }]);
 	});
 
@@ -233,11 +237,11 @@ describe("topHeadlines", () => {
 	const heads = ["one", "two", "three"];
 	test("the first N that fit, and how many more", () => {
 		const two = `${renderHeadlines(["one", "two"])}\n_(+1 more goals in brain/North Star.md)_`;
-		assert.equal(topHeadlines(heads, bytes(two)), two);
-		assert.equal(topHeadlines(heads, bytes(two) - 1), `${renderHeadlines(["one"])}\n_(+2 more goals in brain/North Star.md)_`);
+		assert.equal(topHeadlines(heads, (b) => bytes(b) <= bytes(two)), two);
+		assert.equal(topHeadlines(heads, (b) => bytes(b) <= bytes(two) - 1), `${renderHeadlines(["one"])}\n_(+2 more goals in brain/North Star.md)_`);
 	});
 	test("null when not one fits", () => {
-		assert.equal(topHeadlines(heads, 5), null);
+		assert.equal(topHeadlines(heads, (b) => bytes(b) <= 5), null);
 	});
 });
 
@@ -250,7 +254,9 @@ describe("session-start — #304's fixture on the hook path", () => {
 			const bullets = Array.from({ length: 30 }, (_, i) => `- [[Project ${i}]] — ${clause}${"More detail on how it is measured and what counts. ".repeat(5)}`);
 			writeFileSync(join(dir, "brain", "North Star.md"), `---\ndescription: d\n---\n# North Star\n\n## Current Focus\n\n${bullets.join("\n")}\n`);
 			writeFileSync(join(dir, "brain", "Gotchas.md"), "---\ndescription: pitfalls\n---\n# G\n");
-			const { stdout, code } = spawnHook(resolve(dirname(fileURLToPath(import.meta.url)), "../session-start.ts"), { source: "startup" }, { CLAUDE_PROJECT_DIR: dir });
+			const run = spawnHook(resolve(dirname(fileURLToPath(import.meta.url)), "../session-start.ts"), { source: "startup" }, { CLAUDE_PROJECT_DIR: dir });
+			const { code } = run;
+			const stdout = hookContext(run.stdout);
 			assert.equal(code, 0);
 			const ns = stdout.slice(stdout.indexOf("### North Star"), stdout.indexOf("\n### ", stdout.indexOf("### North Star") + 5));
 			assert.match(ns, /- Project 0 — move the release build onto tagged artifacts/);
@@ -309,11 +315,13 @@ describe("North Star full level — no silent cut", () => {
 		try {
 			const tasks = Array.from({ length: 14 }, (_, i) => `- [ ] task ${i + 1}`).join("\n");
 			writeFileSync(join(dir, "Tasks.md"), `# Tasks\n\n${tasks}\n`);
-			const { stdout, code } = spawnHook(
+			const run = spawnHook(
 				resolve(dirname(fileURLToPath(import.meta.url)), "../session-start.ts"),
 				{ source: "startup" },
 				{ CLAUDE_PROJECT_DIR: dir },
 			);
+			const { code } = run;
+			const stdout = hookContext(run.stdout);
 			assert.equal(code, 0);
 			const meter = stdout.trim().split("\n").pop() ?? "";
 			assert.match(meter, / — cut: Open Tasks \(10 of 14\)/, meter);
@@ -336,5 +344,73 @@ describe("North Star full level — no silent cut", () => {
 			formatInjectionSize(2_000, { budgetBytes: 9_100, cutSections: [{ section: "Open Tasks", note: "10 of 14" }] }),
 			"_context injected: 2.0kB / 9.1kB budget — cut: Open Tasks (10 of 14)_",
 		);
+	});
+});
+
+describe("the budget measures what goes out inside the JSON envelope (#340)", () => {
+	// Quotes and newlines escape to two characters each, so a section that fits
+	// a budget in bytes can be over it once encoded. Measured enveloped, the
+	// budget lets it fall back to its pointer instead of leaving the backstop
+	// to truncate the output mid-section.
+	const quoted: BudgetSection = { header: "### Quoted", body: '"'.repeat(5_000), priority: 10, fallback: "(pointer)" };
+
+	test("measured in bytes it fits whole; measured enveloped it falls back", () => {
+		assert.deepEqual(applyInjectionBudget([quoted], 6_000).collapsed, []);
+		assert.deepEqual(applyInjectionBudget([quoted], 6_000, enveloped).collapsed, ["Quoted"]);
+	});
+
+	test("enveloped never measures smaller than bytes, so multi-byte text is held as tightly as before", () => {
+		const cjk = "界".repeat(1_000);
+		assert.equal(enveloped(cjk), Buffer.byteLength(cjk, "utf-8"));
+		assert.ok(enveloped('a"b\nc') > Buffer.byteLength('a"b\nc', "utf-8"));
+	});
+});
+
+describe("a fitted rung sizes itself as the budget measures it (#340)", () => {
+	// North Star's top-N rung fits its body into the room the budget leaves.
+	// Fitted in raw bytes while the budget measures the encoded text, its body
+	// was always a little over once escaped, so the rung was never taken and
+	// the goals fell to their pointer.
+	test("under the enveloped measure, North Star still degrades to top-N rather than collapsing", () => {
+		const headlines = Array.from({ length: 40 }, (_, i) => `- goal ${i} keep the release pipeline building from tags`);
+		const fixed: BudgetSection = { header: "### Fixed", body: "f".repeat(2_000), priority: 1 };
+		const northStar: BudgetSection = {
+			header: "### North Star (current goals)",
+			body: headlines.join("\n"),
+			priority: 10,
+			fallback: "(pointer)",
+			levels: [{ name: "top-N", fit: (fits) => topHeadlines(headlines, fits) }],
+		};
+		for (const budget of [2_600, 2_800, 3_000]) {
+			const r = applyInjectionBudget([fixed, northStar], budget, enveloped);
+			assert.deepEqual(r.collapsed, [], `budget ${budget}: collapsed`);
+			assert.deepEqual(r.degraded, [{ section: "North Star (current goals)", level: "top-N" }], `budget ${budget}`);
+		}
+	});
+	test("top-N keeps every headline the whole render has room for, whatever the rest of it measures", () => {
+		// enveloped is max(bytes, json) of the WHOLE render, which is not the sum
+		// of its parts: multi-byte text elsewhere pays for this body's escapes.
+		const headlines = Array.from({ length: 60 }, (_, i) => `- goal ${i}`);
+		const fixed: BudgetSection = { header: "### Fixed", body: "語".repeat(700), priority: 1 };
+		const northStar = (body: string): BudgetSection => ({
+			header: "### North Star (current goals)",
+			body,
+			priority: 10,
+			fallback: "(pointer)",
+			levels: [{ name: "top-N", fit: (fits) => topHeadlines(headlines, fits) }],
+		});
+		const full = northStar(headlines.join("\n"));
+		const textOf = (body: string) => `### Fixed\n${fixed.body}\n\n### North Star (current goals)\n${body}`;
+		for (const budget of [2_400, 2_500, 2_600]) {
+			// The most headlines any top-N body could keep inside this budget.
+			let best = 0;
+			for (let n = 1; n < headlines.length; n++) {
+				const body = `${renderHeadlines(headlines.slice(0, n))}\n_(+${headlines.length - n} more goals in brain/North Star.md)_`;
+				if (enveloped(textOf(body)) <= budget) best = n;
+			}
+			assert.ok(best > 0, `budget ${budget} leaves room for at least one`);
+			const r = applyInjectionBudget([fixed, full], budget, enveloped);
+			assert.ok(r.text.includes(`(+${headlines.length - best} more goals`), `budget ${budget}: kept fewer than ${best}`);
+		}
 	});
 });

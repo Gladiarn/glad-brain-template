@@ -74,7 +74,7 @@ ShardMind executes only through its terminal UI (`--json` works with `--dry-run`
 ### U3. Verify
 
 1. `shardmind --json` reports the new version, with `update.kind` `up-to-date`. Its `files.modified` must be exactly the **ahead** files, plus any conflicts the user kept. A behind file listed there was frozen, so fix it before finishing.
-2. The hooks run: `echo '{}' | node --experimental-strip-types .claude/scripts/session-start.ts` exits 0 and prints the session context.
+2. The hooks run: `echo '{}' | node --experimental-strip-types .claude/scripts/session-start.ts` exits 0 and prints the session context, as one JSON object whose `hookSpecificOutput.additionalContext` carries it.
 3. Report the **ahead** files to the user as upstream candidates. A local improvement every vault could use belongs upstream, where the next release carries it.
 
 ## Subagents

@@ -54,10 +54,12 @@ import {
 	collectOpenTasks,
 	applyInjectionBudget,
 	effectiveInjectionBudget,
+	enveloped,
 	parseInjectionBudget,
 	parseInstructionBudget,
 	DEFAULT_INSTRUCTION_BUDGET_BYTES,
 	METER_HEADROOM,
+	utf8Bytes,
 	type InjectionBudget,
 	parseListingCollapseThreshold,
 	shouldCollapseDir,
@@ -83,7 +85,7 @@ import {
 	scanActiveHygiene,
 } from "./lib/active-hygiene.ts";
 
-import { debug, fitWithMeter, HOOK_OUTPUT_LIMIT, type OutputLimit, readStdinJson } from "./lib/hook-io.ts";
+import { debug, envelopedLimit, fitWithMeter, type OutputLimit, readStdinJson, writeHookOutput } from "./lib/hook-io.ts";
 import { REFRESH_SWITCH, refreshDisabled } from "./lib/qmd-refresh.ts";
 import { readOmMod } from "./lib/om-mod.ts";
 import { resolveProjectDir } from "./lib/project-dir.ts";
@@ -342,7 +344,7 @@ function northStarSection(priority: number): BudgetSection {
 	if (ladder.headlines.length > 0) {
 		levels.push(
 			{ name: "headlines", body: renderHeadlines(ladder.headlines) },
-			{ name: "top-N", fit: (room) => topHeadlines(ladder.headlines, room) },
+			{ name: "top-N", fit: (fits) => topHeadlines(ladder.headlines, fits) },
 		);
 	}
 	return { header, body: ladder.full, priority, fallback: NORTH_STAR_POINTER, levels };
@@ -680,24 +682,33 @@ if (hygieneLines.length > 0) {
 const budget: InjectionBudget = delivering
 	? { bytes: parseInstructionBudget(manifestJson) ?? DEFAULT_INSTRUCTION_BUDGET_BYTES }
 	: effectiveInjectionBudget(parseInjectionBudget(manifestJson));
-const budgeted = applyInjectionBudget(sections, budget.bytes);
+// On the hook path the context goes out inside a JSON envelope (#340): Gemini
+// parses a hook's stdout as JSON and reads context only from
+// hookSpecificOutput.additionalContext (per its hooks reference as of
+// 2026-10-13, not observed), and Claude Code accepts the same shape. So the
+// budget, the backstop cut and the meter's figure all use the encoded size.
+// A mod's deliver run stays plain text: it becomes an instruction file.
+const measure = delivering ? utf8Bytes : enveloped;
+const budgeted = applyInjectionBudget(sections, budget.bytes, measure);
 const limit: OutputLimit = delivering
 	? { max: budget.bytes + METER_HEADROOM, unit: "bytes", name: "the instruction budget" }
-	: HOOK_OUTPUT_LIMIT;
+	: envelopedLimit("SessionStart");
 
-process.stdout.write(
-	fitWithMeter(
-		budgeted.text + "\n",
-		(cut, bodyBytes) =>
-			formatInjectionSize(bodyBytes, {
-				budgetBytes: budget.bytes,
-				collapsed: budgeted.collapsed,
-				degraded: budgeted.degraded,
-				cutSections: budgeted.cut,
-				clampedFrom: budget.clampedFrom,
-				cut,
-				cutTo: limit.name,
-			}),
-		limit,
-	),
+const context = fitWithMeter(
+	budgeted.text + "\n",
+	// Uncut, the size the budget judged, without the separator line added here.
+	(cut, bodySize) =>
+		formatInjectionSize(cut ? bodySize : budgeted.bytes, {
+			budgetBytes: budget.bytes,
+			collapsed: budgeted.collapsed,
+			degraded: budgeted.degraded,
+			cutSections: budgeted.cut,
+			clampedFrom: budget.clampedFrom,
+			cut,
+			cutTo: limit.name,
+		}),
+	limit,
+	measure,
 );
+if (delivering) process.stdout.write(context);
+else writeHookOutput("SessionStart", context);

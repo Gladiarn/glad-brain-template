@@ -6,7 +6,7 @@
 
 import { basename, join, resolve } from "node:path";
 
-import { HOOK_OUTPUT_MAX_CHARS } from "./hook-io.ts";
+import { envelopedLimit } from "./hook-io.ts";
 import { escapeRegex } from "./regex.ts";
 
 export function take(stdout: string, n: number): string {
@@ -102,7 +102,12 @@ export type BudgetSection = {
 export type BudgetLevel = {
 	readonly name: string;
 	readonly body?: string | undefined;
-	readonly fit?: ((maxBytes: number) => string | null) | undefined;
+	/**
+	 * The largest body this level can make that `fits`, or null. `fits` judges
+	 * the whole render with that body in place, by the budget's own measure: a
+	 * part's size does not add up to the whole's under every measure (#340).
+	 */
+	readonly fit?: ((fits: (body: string) => boolean) => string | null) | undefined;
 };
 
 export type BudgetResult = {
@@ -151,8 +156,9 @@ function renderSections(sections: readonly BudgetSection[]): string {
 export function applyInjectionBudget(
 	sections: readonly BudgetSection[],
 	budgetBytes: number,
+	measure: (text: string) => number = utf8Bytes,
 ): BudgetResult {
-	const size = (s: readonly BudgetSection[]): number => Buffer.byteLength(renderSections(s), "utf-8");
+	const size = (s: readonly BudgetSection[]): number => measure(renderSections(s));
 	const name = (i: number): string => (sections[i]?.header ?? "").replace(/^#+\s*/, "");
 	// A section delivered at full whose body is itself a cut says so.
 	const cutOf = (delivered: readonly BudgetSection[]) =>
@@ -182,21 +188,13 @@ export function applyInjectionBudget(
 	for (const { s, i } of bestFirst) {
 		const rungs: readonly BudgetLevel[] = [{ name: "full", body: s.body }, ...(s.levels ?? [])];
 		for (const rung of rungs) {
-			let body: string | null | undefined = rung.body;
-			if (rung.fit !== undefined) {
-				const empty = [...current];
-				empty[i] = { ...s, body: "" };
-				const room = budgetBytes - size(empty);
-				body = room > 0 ? rung.fit(room) : null;
-			}
-			if (body === null || body === undefined || body === "") continue;
-			const probe = [...current];
-			probe[i] = { ...s, body };
-			if (size(probe) <= budgetBytes) {
-				current = probe;
-				level.set(i, rung.name);
-				break;
-			}
+			const withBody = (body: string) => current.map((c, j) => (j === i ? { ...s, body } : c));
+			const fits = (body: string) => size(withBody(body)) <= budgetBytes;
+			const body = rung.fit !== undefined ? rung.fit(fits) : rung.body;
+			if (body === null || body === undefined || body === "" || !fits(body)) continue;
+			current = withBody(body);
+			level.set(i, rung.name);
+			break;
 		}
 	}
 
@@ -208,7 +206,7 @@ export function applyInjectionBudget(
 		.filter(({ i }) => level.get(i) !== "pointer" && level.get(i) !== "full")
 		.map(({ i }) => ({ section: name(i), level: level.get(i) as string }));
 	const text = renderSections(current);
-	return { text, bytes: Buffer.byteLength(text, "utf-8"), collapsed, degraded, cut: cutOf(current) };
+	return { text, bytes: measure(text), collapsed, degraded, cut: cutOf(current) };
 }
 
 /**
@@ -276,16 +274,33 @@ export function parseInjectionBudget(manifestJson: string | null): number | null
 /** Room the closing meter line keeps beside the budgeted sections. */
 export const METER_HEADROOM = 400;
 
+/** A text's UTF-8 size: what a budget measures by default. */
+export const utf8Bytes = (text: string): number => Buffer.byteLength(text, "utf-8");
+
 /**
- * The most the sections may spend. Claude Code caps a hook's plain stdout at
+ * A text's size as it goes out inside a JSON envelope (#340): its UTF-8 bytes
+ * or its JSON-encoded length, whichever is larger. Escaping (`\n`, quotes)
+ * grows ASCII text; multi-byte text is still held to its bytes, so no vault
+ * is measured more loosely than as plain stdout.
+ *
+ * On the hook path the budget, the ceiling, `BudgetResult.bytes` and the
+ * meter's kB are in this unit while keeping their byte names: the setting
+ * they answer to is `eager_layer_budget_bytes`, and this size is never below
+ * the byte count, so a figure read as bytes never understates.
+ */
+export const enveloped = (text: string): number => Math.max(utf8Bytes(text), JSON.stringify(text).length);
+
+/**
+ * The most the sections may spend. Claude Code caps a hook's context at
  * 10,000 characters and, over it, injects a file path and the first 2,000
  * characters instead, so a budget above the cap never binds: the session
  * gets a preview and the meter at the end is the first thing lost (#254).
- * HOOK_OUTPUT_MAX_CHARS already keeps a margin under that 10,000. The
- * budget is in bytes, and a string's UTF-8 bytes are never fewer than its
- * characters, so a byte ceiling also holds the character cap.
+ * The hook path sends the context inside a JSON envelope (#340), so the
+ * ceiling is what the envelope leaves of the hook output cap (which already
+ * keeps a margin under that 10,000), less the meter's headroom. The budget
+ * is measured as `enveloped`: never fewer than the encoded characters.
  */
-export const INJECTION_CEILING_BYTES = HOOK_OUTPUT_MAX_CHARS - METER_HEADROOM;
+export const INJECTION_CEILING_BYTES = envelopedLimit("SessionStart").max - METER_HEADROOM;
 
 /** A budget the eager layer is held to, and the configured value when it was clamped. */
 export type InjectionBudget = { readonly bytes: number; readonly clampedFrom?: number };
@@ -1039,14 +1054,14 @@ export function renderHeadlines(headlines: readonly string[]): string {
 }
 
 /**
- * The first N headlines that fit in `maxBytes`, with a line saying how many
+ * The first N headlines that `fits` accepts, with a line saying how many
  * more there are. Null when not even one fits, or when all of them do (that
  * is the `headlines` level, not this one).
  */
-export function topHeadlines(headlines: readonly string[], maxBytes: number): string | null {
+export function topHeadlines(headlines: readonly string[], fits: (body: string) => boolean): string | null {
 	for (let n = headlines.length - 1; n >= 1; n--) {
 		const body = `${renderHeadlines(headlines.slice(0, n))}\n_(+${headlines.length - n} more goals in brain/North Star.md)_`;
-		if (Buffer.byteLength(body, "utf-8") <= maxBytes) return body;
+		if (fits(body)) return body;
 	}
 	return null;
 }

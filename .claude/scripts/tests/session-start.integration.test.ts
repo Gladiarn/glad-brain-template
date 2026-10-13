@@ -35,8 +35,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { HOOK_OUTPUT_MAX_CHARS } from "../lib/hook-io.ts";
-import { METER_HEADROOM } from "../lib/session-start.ts";
-import { runScript as spawnHook, rmTemp } from "./_helpers.ts";
+import { INJECTION_CEILING_BYTES, METER_HEADROOM } from "../lib/session-start.ts";
+
+/** The hook-path ceiling as the meter prints it, regex-escaped (derived: the envelope takes its share, #340). */
+const CEILING_KB = (INJECTION_CEILING_BYTES / 1000).toFixed(1).replace(".", "\\.");
+import { hookContext, runScript as spawnHook, rmTemp } from "./_helpers.ts";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = resolve(SCRIPT_DIR, "../session-start.ts");
@@ -70,7 +73,15 @@ before(() => {
 // `EPERM` thrown out of this hook after the assertions had already passed.
 after(() => rmTemp(TMP_DIR));
 
-const runHook = () => spawnHook(SCRIPT, "", { CLAUDE_PROJECT_DIR: TMP_DIR });
+/**
+ * A hook-path run (#340): its stdout is one JSON envelope, so `stdout` here is
+ * the context it carried and `raw` what was printed. The cap applies to `raw`.
+ */
+const hookPath = (stdin: string | object, env: Record<string, string>) => {
+	const r = spawnHook(SCRIPT, stdin, env);
+	return { ...r, raw: r.stdout, stdout: hookContext(r.stdout) };
+};
+const runHook = () => hookPath("", { CLAUDE_PROJECT_DIR: TMP_DIR });
 
 const REQUIRED_SECTIONS = [
 	"### Date",
@@ -92,6 +103,40 @@ describe("session-start — no detached qmd refresh under the switch (#337)", ()
 		const { code, stderr } = spawnHook(SCRIPT, "", { CLAUDE_PROJECT_DIR: TMP_DIR, HOOK_DEBUG: "1" });
 		assert.equal(code, 0);
 		assert.match(stderr, /session-start: qmd refresh off \(VAULT_QMD_REFRESH=off\); nothing spawned/);
+	});
+});
+
+describe("session-start — the hook path prints one JSON envelope (#340)", () => {
+	// Gemini parses a hook's stdout as JSON and takes context only from
+	// hookSpecificOutput.additionalContext (per its hooks reference as of
+	// 2026-10-13, not observed); Claude Code accepts the same shape.
+	test("stdout is exactly one SessionStart envelope, whose additionalContext carries the context and the meter", () => {
+		const { raw, code } = runHook();
+		assert.equal(code, 0);
+		const parsed = JSON.parse(raw) as { hookSpecificOutput?: { hookEventName?: string; additionalContext?: string } };
+		assert.deepEqual(Object.keys(parsed), ["hookSpecificOutput"]);
+		assert.equal(parsed.hookSpecificOutput?.hookEventName, "SessionStart");
+		const context = parsed.hookSpecificOutput?.additionalContext ?? "";
+		assert.ok(context.includes("### Date"), "the context is inside the envelope");
+		assert.match(lastLine(context), /^_context injected: /, "the meter closes the context");
+	});
+
+	test("an empty folder, no vault files at all, still gets one well-formed envelope", () => {
+		const dir = mkdtempSync(join(tmpdir(), "session-start-empty-"));
+		try {
+			const { stdout, code } = hookPath({ source: "startup" }, { CLAUDE_PROJECT_DIR: dir });
+			assert.equal(code, 0);
+			assert.match(lastLine(stdout), /^_context injected: /);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("deliver stays plain text: the mod writes it into an instruction file", () => {
+		const { stdout, code } = spawnHook(SCRIPT, { source: "startup", om_mod: "deliver" }, { CLAUDE_PROJECT_DIR: TMP_DIR });
+		assert.equal(code, 0);
+		assert.ok(stdout.startsWith("## Session Context"), "plain Markdown, not JSON");
+		assert.throws(() => JSON.parse(stdout));
 	});
 });
 
@@ -217,7 +262,7 @@ describe("session-start — listing collapse and injection budget", () => {
 
 	after(() => rmTemp(BIG_DIR));
 
-	const runBig = () => spawnHook(SCRIPT, "", { CLAUDE_PROJECT_DIR: BIG_DIR });
+	const runBig = () => hookPath("", { CLAUDE_PROJECT_DIR: BIG_DIR });
 	const listingOf = (stdout: string) =>
 		stdout.split("### Vault File Listing\n")[1]?.split("\n### ")[0] ?? "";
 
@@ -250,7 +295,7 @@ describe("session-start — listing collapse and injection budget", () => {
 	test("no manifest budget → the hook output ceiling is the budget (#254)", () => {
 		const { stdout } = runBig();
 		const last = stdout.split("\n").filter((l) => l.trim() !== "").pop() ?? "";
-		assert.match(last, /^_context injected: \d+\.\dkB \/ 9\.1kB budget(?: — collapsed: [^_]+)?_$/);
+		assert.match(last, new RegExp(`^_context injected: \\d+\\.\\dkB / ${CEILING_KB}kB budget(?: — collapsed: [^_]+)?_$`));
 	});
 
 	test("a tight manifest budget degrades sections and NAMES them in the meter", () => {
@@ -299,7 +344,7 @@ describe("session-start — listing collapse and injection budget", () => {
 				runBig().stdout.split("\n").filter((l) => l.trim() !== "").pop() ?? "";
 			assert.match(
 				last,
-				/^_context injected: \d+\.\dkB \/ 9\.1kB budget \(80\.0kB configured, held under the hook output cap\)(?: — collapsed: [^_]+)?_$/,
+				new RegExp(`^_context injected: \\d+\\.\\dkB / ${CEILING_KB}kB budget \\(80\\.0kB configured, held under the hook output cap\\)(?: — collapsed: [^_]+)?_$`),
 			);
 		} finally {
 			rmSync(manifest, { force: true });
@@ -356,10 +401,10 @@ describe("session-start — the hook output cap", () => {
 	test("an ordinary vault of ~250 nested notes fits, the listing degrading first", () => {
 		const dir = nestedVault({ eager_layer_budget_bytes: 80_000 });
 		try {
-			const { stdout, code, stderr } = spawnHook(SCRIPT, "", { CLAUDE_PROJECT_DIR: dir });
+			const { stdout, raw, code, stderr } = hookPath("", { CLAUDE_PROJECT_DIR: dir });
 			assert.equal(code, 0);
 			assert.equal(stderr, "");
-			assert.ok(stdout.length <= CAP, `stdout is ${stdout.length} characters`);
+			assert.ok(raw.length <= CAP, `stdout is ${raw.length} characters`);
 			assert.match(lastLine(stdout), /^_context injected: .* — collapsed: Vault File Listing_$/);
 		} finally {
 			rmTemp(dir);
@@ -373,11 +418,11 @@ describe("session-start — the hook output cap", () => {
 		try {
 			const tasks = Array.from({ length: 10 }, (_, i) => `- [ ] task ${i} ${"x".repeat(1_500)}`).join("\n");
 			writeFileSync(join(dir, "Tasks.md"), `# Tasks\n\n${tasks}\n`);
-			const { stdout, code, stderr } = spawnHook(SCRIPT, "", { CLAUDE_PROJECT_DIR: dir });
+			const { stdout, raw, code, stderr } = hookPath("", { CLAUDE_PROJECT_DIR: dir });
 			assert.equal(code, 0);
 			assert.equal(stderr, "");
 			assert.ok(stdout.includes("task 0 "), "the fixture's tasks reached the output");
-			assert.ok(stdout.length <= CAP, `stdout is ${stdout.length} characters`);
+			assert.ok(raw.length <= CAP, `stdout is ${raw.length} characters`);
 			assert.ok(stdout.includes("… (truncated to fit the hook output cap)"), "the cut is marked where it happened");
 			assert.match(lastLine(stdout), /^_context injected: .* — truncated to fit the hook output cap_$/);
 		} finally {
@@ -430,7 +475,7 @@ describe("session-start — om_mod (a Claude Code mod)", () => {
 	test("without the flag the same run does write VAULT_PATH (the standdown check above can fail)", () => {
 		const envFile = join(TMP_DIR, "env-plain.sh");
 		writeFileSync(envFile, "");
-		const { stdout } = spawnHook(SCRIPT, { source: "startup" }, { CLAUDE_PROJECT_DIR: TMP_DIR, CLAUDE_ENV_FILE: envFile });
+		const { stdout } = hookPath({ source: "startup" }, { CLAUDE_PROJECT_DIR: TMP_DIR, CLAUDE_ENV_FILE: envFile });
 		assert.ok(stdout.includes("### Date"));
 		assert.match(readFileSync(envFile, "utf-8"), /VAULT_PATH/);
 	});
@@ -447,8 +492,8 @@ describe("session-start — om_mod (a Claude Code mod)", () => {
 			assert.ok(delivered.stdout.includes("Example project-11 decisions note 9.md"), "the deepest listing entry is there");
 
 			// The same vault as hook output stays under the cap (#254), listing degraded.
-			const hooked = spawnHook(SCRIPT, { source: "startup" }, { CLAUDE_PROJECT_DIR: dir });
-			assert.ok(hooked.stdout.length <= HOOK_OUTPUT_MAX_CHARS);
+			const hooked = hookPath({ source: "startup" }, { CLAUDE_PROJECT_DIR: dir });
+			assert.ok(hooked.raw.length <= HOOK_OUTPUT_MAX_CHARS);
 			assert.match(lastLine(hooked.stdout), /collapsed: Vault File Listing/);
 		} finally {
 			rmTemp(dir);
@@ -469,13 +514,13 @@ describe("session-start — om_mod (a Claude Code mod)", () => {
 		const delivered = spawnHook(SCRIPT, { source: "compact", om_mod: "deliver" }, { CLAUDE_PROJECT_DIR: TMP_DIR }).stdout;
 		assert.ok(delivered.includes("### Vault File Listing"));
 		assert.ok(!delivered.includes("### Context Pointer"));
-		const hooked = spawnHook(SCRIPT, { source: "compact" }, { CLAUDE_PROJECT_DIR: TMP_DIR }).stdout;
+		const hooked = hookPath({ source: "compact" }, { CLAUDE_PROJECT_DIR: TMP_DIR }).stdout;
 		assert.ok(hooked.includes("### Context Pointer"), "without the flag compact stays pointer mode");
 	});
 
 	test("an unknown om_mod value changes nothing: output identical to a run with no flag", () => {
-		const plain = spawnHook(SCRIPT, { source: "startup" }, { CLAUDE_PROJECT_DIR: TMP_DIR });
-		const unknown = spawnHook(SCRIPT, { source: "startup", om_mod: "silence" }, { CLAUDE_PROJECT_DIR: TMP_DIR });
+		const plain = hookPath({ source: "startup" }, { CLAUDE_PROJECT_DIR: TMP_DIR });
+		const unknown = hookPath({ source: "startup", om_mod: "silence" }, { CLAUDE_PROJECT_DIR: TMP_DIR });
 		assert.equal(unknown.code, 0);
 		assert.equal(unknown.stdout, plain.stdout);
 		assert.ok(plain.stdout.includes("### Date"));

@@ -39,7 +39,7 @@
  * Run it by hand on any Claude Code version before it is recommended, with a
  * logged-in `claude`:
  *
- *   node --experimental-strip-types .github/scripts/delivery-gate.ts [--trusted-dir <dir>] [--file-issue] [--model opus] [--claude <bin>]
+ *   node --experimental-strip-types .github/scripts/delivery-gate.ts [--trusted-dir <dir>] [--file-issue] [--hooks-only] [--model opus] [--claude <bin>]
  *
  * `--trusted-dir` loads the mod the way a user gets it: found in the vault's
  * `.claude/skills/` after the workspace-trust prompt, which a headless session
@@ -49,6 +49,10 @@
  * the mod is loaded with `--plugin-dir` from a temp-folder vault.
  *
  * `--file-issue` opens a GitHub issue (with `gh`) when a checkpoint fails.
+ *
+ * `--hooks-only` runs only the sessions without the mod (the settings hooks
+ * alone), for a change that touches the hook path and not the mod's (#340).
+ * It cannot be combined with `--self-test`, which only runs the mod.
  *
  * `--self-test` runs two broken copies of the mod instead: one cuts its
  * context to 2,000 characters everywhere, one delivers it whole only at
@@ -71,6 +75,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { parseHookContext } from "../../.claude/scripts/lib/hook-io.ts";
 import { isMainModule } from "../../.claude/scripts/lib/main-guard.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -612,7 +617,10 @@ export function contextOf(vault: string, deliver: boolean, source: "startup" | "
 		},
 	);
 	if (run.status !== 0) throw new Error(`session-start.ts failed: ${run.stderr}`);
-	return run.stdout;
+	if (deliver) return run.stdout;
+	// The hook path prints one JSON envelope (#340): the context is its
+	// additionalContext, which is what reaches the model.
+	return parseHookContext(run.stdout, "SessionStart");
 }
 
 /** What a context makes a checkpoint expect: its last line, and the marker if the context carries it. */
@@ -793,6 +801,13 @@ const print = (label: string, verdicts: readonly Verdict[]) => {
 	}
 };
 
+/** Why these flags cannot run together, or null when they can. */
+export function flagConflict(argv: readonly string[]): string | null {
+	return argv.includes("--self-test") && argv.includes("--hooks-only")
+		? "--self-test breaks the mod, and --hooks-only runs no session with the mod: drop one of them."
+		: null;
+}
+
 /** The self-test's expectation: every checkpoint fails, except the startup-only copy's own startup, its positive control. */
 export function selfTestOutcome(runs: ReadonlyArray<{ readonly breakage: Breakage; readonly verdicts: readonly Verdict[] }>): {
 	exitCode: 0 | 1 | 2;
@@ -838,7 +853,13 @@ async function main(): Promise<void> {
 		const i = argv.indexOf(name);
 		return i >= 0 && argv[i + 1] ? argv[i + 1] : undefined;
 	};
+	const conflict = flagConflict(argv);
+	if (conflict) {
+		console.error(conflict);
+		process.exit(2);
+	}
 	const selfTest = argv.includes("--self-test");
+	const hooksOnly = argv.includes("--hooks-only");
 	const trustedDir = flag("--trusted-dir");
 	const base = { claude: flag("--claude") ?? "claude", model: flag("--model") ?? "opus", ...(trustedDir ? { trustedDir: resolve(trustedDir) } : {}) };
 	const version = spawnSync(base.claude, ["--version"], { encoding: "utf8" }).stdout?.trim() || "unknown version";
@@ -847,7 +868,7 @@ async function main(): Promise<void> {
 		process.exit(130);
 	});
 	const loading = trustedDir ? `found in the trusted folder ${resolve(trustedDir)}` : "loaded with --plugin-dir";
-	console.log(`Delivery gate · ${version} · ${base.model} · the mod ${loading}${selfTest ? " · SELF-TEST" : ""}\n`);
+	console.log(`Delivery gate · ${version} · ${base.model} · ${hooksOnly ? "settings hooks only" : `the mod ${loading}`}${selfTest ? " · SELF-TEST" : ""}\n`);
 
 	if (selfTest) {
 		const runs: Array<{ breakage: Breakage; verdicts: Verdict[] }> = [];
@@ -864,7 +885,7 @@ async function main(): Promise<void> {
 	}
 
 	const verdicts: Verdict[] = [];
-	for (const steps of plan(true)) verdicts.push(...(await runSession(steps, "none", { ...base, withMod: true })));
+	if (!hooksOnly) for (const steps of plan(true)) verdicts.push(...(await runSession(steps, "none", { ...base, withMod: true })));
 	for (const steps of plan(false)) verdicts.push(...(await runSession(steps, "none", { ...base, withMod: false })));
 	print("", verdicts);
 	const invalid = verdicts.filter((v) => v.outcome === "INVALID").length;
