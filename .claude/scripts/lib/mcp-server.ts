@@ -533,56 +533,80 @@ export function createHandlers(deps: ServerDeps): Handlers {
 		// comparison; every OTHER memory stays in it, so a correction that also
 		// duplicates a third note is still refused, which is the check working.
 		//
-		// Only what recall serves this caller (#364). A title can name a memory
-		// scoped to another project, or one recall already withholds; marking it
-		// would withhold it from its own project's callers, whose only replacement
-		// is out of their reach, and naming its file here would show this caller a
+		// Only what recall serves this caller is marked or named (#364, #375). A
+		// memory scoped to another project, or one recall already withholds, is
+		// never marked and never named: naming its file would show this caller a
 		// memory recall never would. Nor is it counted: a count would say whether
 		// another project holds that title, so a claim with no match in reach is
 		// simply not matched, which is the truth from where the caller stands.
+		// The near-duplicate refusal below is the one accepted exception: it says
+		// that near-identical content exists where the new memory would be read,
+		// without naming it, because keeping a correction intact outweighs that
+		// hint (#375). It is audited.
+		// Building `served` itself needs every memory, since a stale copy's
+		// replacement may be out of reach.
 		const served = servedAfterSupersession(
 			digests.map((d) => ({ rel: d.rel, full: d.full, title: d.title, body: d.body, facets: d })),
 			who,
 		);
-		const supers = resolveSupersedes(
-			args.supersedes,
-			digests.filter((d) => served.has(d.rel)),
-		);
+		const inReach = digests.filter((d) => served.has(d.rel));
+		const supers = resolveSupersedes(args.supersedes, inReach);
 		const superseded = new Set(supers.matched.map((m) => m.rel));
 
 		// Near-duplicate suppression, facet-gated so two projects can each hold
-		// their own copy of the same lesson.
+		// their own copy of the same lesson. A duplicate is judged by where the
+		// NEW memory would be read, so it is compared against every memory that
+		// shares a facet with it, in the caller's reach or not (#375): otherwise
+		// a caller could file a second copy into a project it can't see, or
+		// restate a claim whose correction it can't see and undo that correction.
+		// Reach decides only what the refusal may name.
 		if (args.force !== true) {
 			const { duplicates } = findSimilar(
 				v.value,
 				digests.filter((d) => !superseded.has(d.rel)),
 			);
-			if (duplicates.length) {
-				const d = duplicates[0]!;
-				// When the caller DID pass supersedes and NONE of them resolved,
-				// repeating "pass supersedes" is an instruction they already followed
-				// and cannot follow successfully — the title they named does not exist.
-				// Say which ones did not resolve, and point at the exact-match rule,
-				// instead of sending them round the loop a second time.
+			const nameable = duplicates.find((dup) => served.has(dup.entry.rel));
+			const unseen = duplicates.some((dup) => !served.has(dup.entry.rel));
+			// When the caller DID pass supersedes and NONE of them resolved,
+			// repeating "pass supersedes" is an instruction they already followed
+			// and cannot follow successfully — the title they named does not exist.
+			// Say which ones did not resolve, and point at the exact-match rule,
+			// instead of sending them round the loop a second time.
+			const unresolved =
+				supers.unmatched.length && supers.matched.length === 0
+					? [
+							"",
+							`Supersedes did not match any memory: ${supers.unmatched.join(", ")}.`,
+							"Titles are matched exactly, case-insensitively — check the spelling against a recall result.",
+						]
+					: [];
+			if (duplicates.length && nameable === undefined) {
+				audit("refused", { tool: "remember", reason: "near-duplicate out of reach" });
+				return [
+					"Not recorded: a near-identical memory already exists where this one would be read,",
+					"outside what recall serves you, so it isn't named here.",
+					"If this genuinely differs, pass force: true.",
+					...unresolved,
+				].join("\n");
+			}
+			if (nameable !== undefined) {
+				const d = nameable;
 				// If at least one title DID match, keep the original "pass supersedes"
 				// advice for the colliding memory — a typo among several targets must
 				// not hide the hint that still applies to the collision.
-				const advice =
-					supers.unmatched.length && supers.matched.length === 0
-						? [
-								"If this genuinely differs, pass force: true.",
-								"",
-								`Supersedes did not match any memory: ${supers.unmatched.join(", ")}.`,
-								"Titles are matched exactly, case-insensitively — check the spelling against a recall result.",
-							]
-						: [
-								"If this genuinely differs, pass force: true. If it CORRECTS that memory,",
-								"pass supersedes: [\"<its exact title>\"] instead — the old one is kept and back-linked.",
-							];
+				const advice = unresolved.length
+					? ["If this genuinely differs, pass force: true.", ...unresolved]
+					: [
+							"If this genuinely differs, pass force: true. If it CORRECTS that memory,",
+							"pass supersedes: [\"<its exact title>\"] instead — the old one is kept and back-linked.",
+						];
 				return [
 					`Not recorded: a near-identical memory already exists (${Math.round(d.score * 100)}% similar).`,
 					`  ${d.entry.title}`,
 					`  ${d.entry.rel}`,
+					// Said, so that following the advice above doesn't run into a
+					// second refusal the caller was never told about.
+					...(unseen ? ["Another near-identical memory, outside what recall serves you, also matches."] : []),
 					"",
 					...advice,
 				].join("\n");
