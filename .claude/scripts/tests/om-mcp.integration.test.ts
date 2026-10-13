@@ -412,6 +412,131 @@ describe("the om server on the wire", () => {
 	});
 
 	/**
+	 * Supersession vs. the duplicate guard, over the wire.
+	 *
+	 * A correction is a near-copy of what it corrects — same subject, one value or
+	 * one cause changed — so the near-duplicate check used to refuse exactly the
+	 * call `supersedes` exists for, then told the caller to pass `supersedes`,
+	 * which they had. What has to hold is the ORDER inside `callRemember`, and a
+	 * unit test of `findSimilar` cannot tell the two orderings apart: only the
+	 * live server sees the refusal, the back-link and the advice together.
+	 */
+	describe("a correction that supersedes an existing memory", () => {
+		/** Fixture memory, written the way the server writes one so supersession may touch it. */
+		const memory = (name: string, title: string, body: string): string => {
+			const rel = `memories/2026/07/${name}.md`;
+			put(
+				rel,
+				"---\n" +
+					`description: "${body}"\n` +
+					"tags: [memory]\n" +
+					"source: mcp-capture\n" +
+					`origin: "${CALLER}"\n` +
+					"scope: project\n" +
+					`projects: [${CALLER}]\n` +
+					"confidence: verified\n" +
+					"---\n\n" +
+					`# ${title}\n\n${body}\n`,
+			);
+			return rel;
+		};
+
+		const remember = (args: Record<string, unknown>): Promise<Rpc> =>
+			call("tools/call", {
+				name: "remember",
+				arguments: {
+					confidence: "verified",
+					verification: "Observed in this run.",
+					scope: "project",
+					projects: [CALLER],
+					...args,
+				},
+			});
+
+		test("is recorded instead of refused, and back-links the memory it replaces", async () => {
+			const title = "The importer times out after 30 seconds on large CSV files";
+			const body =
+				"The importer times out after 30 seconds on large CSV files because the reader holds the whole file in memory instead of streaming rows.";
+			const correction =
+				"The importer times out after 30 seconds on large CSV files because the proxy in front of it times out first, not the reader holding the whole file in memory.";
+			const rel = memory("import-timeout", title, body);
+
+			const t = textOf(
+				await remember({ title, body: correction, supersedes: [title] }),
+			);
+			assert.match(t, /Recorded: memories\//, "a declared correction must not be refused as a duplicate");
+			assert.match(t, new RegExp(`Superseded: ${title}`));
+
+			// Kept, not deleted — the history is the point, so the proof is the
+			// back-link landing in the file.
+			const old = readFileSync(join(vault, rel), "utf8");
+			assert.match(old, /superseded_by: \["The importer times out/);
+		});
+
+		test("the same correction WITHOUT supersedes is still refused", async () => {
+			// Own titles — the suite shares one vault, so reusing the first test's
+			// titles would refuse against that test's recorded correction instead of
+			// this fixture.
+			const title = "CSV export stalls when the row buffer fills";
+			const body =
+				"CSV export stalls when the row buffer fills because the writer waits for the whole batch before flushing to disk.";
+			const correction =
+				"CSV export stalls when the row buffer fills because the downstream socket backpressures, not because the writer waits for the whole batch.";
+			memory("csv-export-undeclared", title, body);
+
+			const t = textOf(await remember({ title, body: correction }));
+			assert.match(t, /near-identical memory already exists/);
+			assert.doesNotMatch(t, /Recorded:/, "an undeclared restatement is what the guard is for");
+		});
+
+		test("superseding A does not excuse a near-copy of B", async () => {
+			const aTitle = "Nightly sync drops rows older than 90 days";
+			const aBody =
+				"Nightly sync drops rows older than 90 days because the retention filter runs before the upsert, so historical rows never land.";
+			const bTitle = "The compile cache misses when node_modules is rewritten";
+			const bBody =
+				"The compile cache misses when node_modules is rewritten because the cache key is derived from the package tree hash, so every task reruns from scratch.";
+			memory("compile-cache", bTitle, bBody);
+			const aRel = memory("nightly-sync", aTitle, aBody);
+
+			// Names A, but the text collides with B. Only the NAMED target drops out
+			// of the comparison — a correction is not a licence.
+			const t = textOf(
+				await remember({
+					title: bTitle,
+					body: `${bBody.replace(/reruns from scratch\.$/, "reruns from scratch on a clean checkout.")}`,
+					supersedes: [aTitle],
+				}),
+			);
+			assert.match(t, /near-identical memory already exists/);
+			assert.match(t, new RegExp(bTitle), "the refusal must name the memory that actually collides");
+			// A refusal never prints Superseded:, so prove A was left alone in the file.
+			const aFile = readFileSync(join(vault, aRel), "utf8");
+			assert.doesNotMatch(aFile, /superseded_by/, "a refused remember must not back-link A");
+		});
+
+		test("a supersedes title that matches nothing is named, not re-advised", async () => {
+			const bTitle = "Warm starts skip the schema migration step";
+			const bBody =
+				"Warm starts skip the schema migration step because the boot path hashes the migration directory, so every task reruns from scratch.";
+			memory("warm-start-unmatched", bTitle, bBody);
+
+			const t = textOf(
+				await remember({
+					title: bTitle,
+					body: `${bBody.replace(/reruns from scratch\.$/, "reruns from scratch on a clean checkout.")}`,
+					supersedes: ["A title nobody has ever written"],
+				}),
+			);
+			assert.match(t, /near-identical memory already exists/);
+			// The caller DID pass supersedes and it cannot work, so repeating the
+			// advice sends them round the same loop. Say what did not resolve.
+			assert.match(t, /Supersedes did not match any memory: A title nobody has ever written/);
+			assert.doesNotMatch(t, /pass supersedes/, "the advice the caller already followed must not come back");
+		});
+	});
+
+	/**
 	 * Promotion, over the wire.
 	 *
 	 * The unit suite proves the resolver. What only a live server proves is that
