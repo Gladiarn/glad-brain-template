@@ -235,13 +235,17 @@ describe("northStarLadder", () => {
 
 describe("topHeadlines", () => {
 	const heads = ["one", "two", "three"];
+	const two = `${renderHeadlines(["one", "two"])}\n_(+1 more goals in brain/North Star.md)_`;
 	test("the first N that fit, and how many more", () => {
-		const two = `${renderHeadlines(["one", "two"])}\n_(+1 more goals in brain/North Star.md)_`;
 		assert.equal(topHeadlines(heads, (b) => bytes(b) <= bytes(two)), two);
 		assert.equal(topHeadlines(heads, (b) => bytes(b) <= bytes(two) - 1), `${renderHeadlines(["one"])}\n_(+2 more goals in brain/North Star.md)_`);
 	});
 	test("null when not one fits", () => {
 		assert.equal(topHeadlines(heads, (b) => bytes(b) <= 5), null);
+	});
+	test("one short of all, even when every headline fits (#371)", () => {
+		assert.equal(topHeadlines(heads, () => true), two);
+		assert.equal(topHeadlines(["only"], () => true), null);
 	});
 });
 
