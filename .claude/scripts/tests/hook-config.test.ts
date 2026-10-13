@@ -76,6 +76,23 @@ function loadConfig(relPath: string): HookConfig {
 	return JSON.parse(raw) as HookConfig;
 }
 
+/** A matcher read as a regex over the whole name, as Claude Code and Codex read it (and Gemini, for tool events). */
+const regex = (matcher: string, name: string) => new RegExp(`^(?:${matcher})$`).test(name);
+
+/** Whether any entry fires on `name`: one with no matcher matches everything. */
+function firesOn(
+	entries: ReadonlyArray<{ readonly matcher?: string }>,
+	name: string,
+	matches: (matcher: string, name: string) => boolean,
+): boolean {
+	return entries.some((e) => e.matcher === undefined || matches(e.matcher, name));
+}
+
+/** The config's entries for `event` that run `script`, matcher and all. */
+function entriesRunning(relPath: string, event: string, script: string) {
+	return (loadConfig(relPath).hooks?.[event] ?? []).filter((e) => (e.hooks ?? []).some((h) => h.command?.includes(script)));
+}
+
 function eachNodeHookCommand(
 	cfg: HookConfig,
 ): Array<{ readonly event: string; readonly command: string }> {
@@ -427,7 +444,6 @@ describe("hook config — SessionStart fires for every source the agent document
 	// its own way, and a matcher written for one rule silently matches nothing
 	// under another: Gemini's "startup|resume" equalled no source, so
 	// session-start never ran there.
-	const regex = (matcher: string, source: string) => new RegExp(`^(?:${matcher})$`).test(source);
 	// Gemini: a lifecycle matcher is an exact string, "" or "*" matching all
 	// (packages/core/src/hooks/hookPlanner.ts: matchesTrigger is
 	// matcher === trigger; gemini-cli main as of 2026-10-13).
@@ -451,13 +467,10 @@ describe("hook config — SessionStart fires for every source the agent document
 
 	for (const agent of agents) {
 		test(`${agent.label}: session-start runs on every documented source`, () => {
-			const entries = (loadConfig(agent.path).hooks?.["SessionStart"] ?? []).filter((e) =>
-				(e.hooks ?? []).some((h) => h.command?.includes("session-start.ts")),
-			);
+			const entries = entriesRunning(agent.path, "SessionStart", "session-start.ts");
 			assert.ok(entries.length > 0, "a SessionStart entry runs session-start.ts");
 			for (const source of agent.sources) {
-				const fires = entries.some((e) => e.matcher === undefined || agent.matches(e.matcher, source));
-				assert.ok(fires, `no SessionStart matcher fires on source "${source}"`);
+				assert.ok(firesOn(entries, source, agent.matches), `no SessionStart matcher fires on source "${source}"`);
 			}
 		});
 	}
@@ -474,4 +487,31 @@ describe("hook config — SessionStart fires for every source the agent document
 			}
 		}
 	});
+});
+
+describe("hook config — write validation fires on each agent's own file tools (#353)", () => {
+	// validate-write runs after a file write; each agent names its file tools
+	// differently, and a matcher with another agent's names never fires.
+	const agents: ReadonlyArray<{ readonly label: string; readonly path: string; readonly event: string; readonly tools: readonly string[] }> = [
+		// Claude Code: Write and Edit (hooks reference).
+		{ label: "Claude Code", path: ".claude/settings.json", event: "PostToolUse", tools: ["Write", "Edit"] },
+		// Codex: "For file edits through apply_patch, matcher values can use
+		// apply_patch, Edit, or Write" (developers.openai.com/codex/hooks, as of
+		// 2026-10-13). The payload is a separate gap (#354).
+		{ label: "Codex CLI", path: ".codex/hooks.json", event: "PostToolUse", tools: ["Write", "Edit"] },
+		// Gemini: write_file and replace (gemini-cli
+		// tools/definitions/base-declarations.ts, as of 2026-10-13); tool-event
+		// matchers are regexes (hooks/hookPlanner.ts).
+		{ label: "Gemini CLI", path: ".gemini/settings.json", event: "AfterTool", tools: ["write_file", "replace"] },
+	];
+
+	for (const agent of agents) {
+		test(`${agent.label}: validate-write's matcher matches ${agent.tools.join(" and ")}`, () => {
+			const entries = entriesRunning(agent.path, agent.event, "validate-write.ts");
+			assert.ok(entries.length > 0, `a ${agent.event} entry runs validate-write.ts`);
+			for (const tool of agent.tools) {
+				assert.ok(firesOn(entries, tool, regex), `no matcher fires on ${tool}`);
+			}
+		});
+	}
 });
