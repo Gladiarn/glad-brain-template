@@ -34,6 +34,7 @@ type HookConfig = {
 	readonly hooks?: Record<
 		string,
 		ReadonlyArray<{
+			readonly matcher?: string;
 			readonly hooks?: ReadonlyArray<{
 				readonly type?: string;
 				readonly command?: string;
@@ -419,4 +420,58 @@ describe("hook config — Codex and Gemini commands run under their agents' shel
 			ran(bash(command, env), scriptIn(command));
 		});
 	}
+});
+
+describe("hook config — SessionStart fires for every source the agent documents (#352)", () => {
+	// Each agent matches SessionStart's matcher against the session's source
+	// its own way, and a matcher written for one rule silently matches nothing
+	// under another: Gemini's "startup|resume" equalled no source, so
+	// session-start never ran there.
+	const regex = (matcher: string, source: string) => new RegExp(`^(?:${matcher})$`).test(source);
+	// Gemini: a lifecycle matcher is an exact string, "" or "*" matching all
+	// (packages/core/src/hooks/hookPlanner.ts: matchesTrigger is
+	// matcher === trigger; gemini-cli main as of 2026-10-13).
+	const exact = (matcher: string, source: string) => ["", "*", source].includes(matcher.trim());
+	const FOUR_SOURCES = ["startup", "resume", "clear", "compact"];
+	const agents: ReadonlyArray<{
+		readonly label: string;
+		readonly path: string;
+		readonly sources: readonly string[];
+		readonly matches: (matcher: string, source: string) => boolean;
+	}> = [
+		// Claude Code: a regex over startup|resume|clear|compact (hooks reference).
+		{ label: "Claude Code", path: ".claude/settings.json", sources: FOUR_SOURCES, matches: regex },
+		// Codex: "matcher is applied to source for this event. Values are startup,
+		// resume, clear, and compact", and "The matcher field is a regex string"
+		// (developers.openai.com/codex/hooks, as of 2026-10-13).
+		{ label: "Codex CLI", path: ".codex/hooks.json", sources: FOUR_SOURCES, matches: regex },
+		// Gemini: sources startup|resume|clear (docs/hooks/reference.md).
+		{ label: "Gemini CLI", path: ".gemini/settings.json", sources: ["startup", "resume", "clear"], matches: exact },
+	];
+
+	for (const agent of agents) {
+		test(`${agent.label}: session-start runs on every documented source`, () => {
+			const entries = (loadConfig(agent.path).hooks?.["SessionStart"] ?? []).filter((e) =>
+				(e.hooks ?? []).some((h) => h.command?.includes("session-start.ts")),
+			);
+			assert.ok(entries.length > 0, "a SessionStart entry runs session-start.ts");
+			for (const source of agent.sources) {
+				const fires = entries.some((e) => e.matcher === undefined || agent.matches(e.matcher, source));
+				assert.ok(fires, `no SessionStart matcher fires on source "${source}"`);
+			}
+		});
+	}
+
+	// Gemini's tool events (BeforeTool, AfterTool) take a regex; every other
+	// event compares its matcher exactly, so a regex there matches nothing.
+	test("Gemini CLI: no lifecycle matcher is written as a regex", () => {
+		const TOOL_EVENTS = new Set(["BeforeTool", "AfterTool"]);
+		for (const [event, entries] of Object.entries(loadConfig(".gemini/settings.json").hooks ?? {})) {
+			if (TOOL_EVENTS.has(event)) continue;
+			for (const { matcher } of entries) {
+				if (matcher === undefined) continue;
+				assert.match(matcher.trim(), /^(\*|[\w-]*)$/, `${event}'s matcher ${JSON.stringify(matcher)} is compared exactly`);
+			}
+		}
+	});
 });
