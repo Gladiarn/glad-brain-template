@@ -60,7 +60,8 @@ import {
 	writeSystemMessage,
 } from "./lib/hook-io.ts";
 import { readOmMod } from "./lib/om-mod.ts";
-import { triggerDebouncedRefresh } from "./lib/qmd-refresh.ts";
+import { envPath } from "./lib/env-path.ts";
+import { sentinelPathFrom, triggerDebouncedRefresh } from "./lib/qmd-refresh.ts";
 import { HANDOFF_DIR, pruneHandoffs, writeHandoff } from "./lib/stop-handoff.ts";
 import { AGENT_PREFACE, FEEDBACK_PREFACE, FEEDBACK_TRAILER, MOD_PREFACE, stopSummary } from "./lib/stop-report.ts";
 import {
@@ -80,16 +81,12 @@ const DEBOUNCE_MS = 30_000;
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 // See qmd-refresh.ts for the rationale behind the env override — it
 // keeps parallel test workers from racing on the shared repo sentinel.
-const SENTINEL_PATH =
-	process.env["QMD_REFRESH_SENTINEL"] ??
-	join(SCRIPT_DIR, ".qmd-refresh-sentinel");
+const SENTINEL_PATH = sentinelPathFrom(process.env, SCRIPT_DIR);
 const WORKER_PATH = resolvePath(SCRIPT_DIR, "qmd-refresh-run.ts");
 // The last report each session was shown (lib/hint-state.ts, the same
 // self-pruning, fail-open store as the classifier's hint dedupe, #107).
 // STOP_CHECKLIST_STATE routes it to a tmp path for tests.
-const STATE_PATH =
-	process.env["STOP_CHECKLIST_STATE"] ??
-	join(SCRIPT_DIR, ".checklist-state.json");
+const STATE_PATH = envPath(process.env, "STOP_CHECKLIST_STATE", join(SCRIPT_DIR, ".checklist-state.json"));
 
 type HookInput = {
 	readonly hook_event_name?: unknown;

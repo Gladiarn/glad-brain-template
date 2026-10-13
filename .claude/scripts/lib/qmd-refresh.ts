@@ -16,8 +16,9 @@
 
 import { spawn } from "node:child_process";
 import { rmSync, statSync, writeFileSync } from "node:fs";
-import { resolve as resolvePath } from "node:path";
+import { join, resolve as resolvePath } from "node:path";
 import { buildQmdCommand, REFRESH_SWITCH, refreshDisabled, resolveQmdEntry } from "./qmd.ts";
+import { envPath } from "./env-path.ts";
 import { debug } from "./hook-io.ts";
 import { qmdArgsWithIndex } from "./session-start.ts";
 
@@ -33,6 +34,15 @@ const SKIP_SEGMENTS: readonly string[] = [
 	"/.obsidian/",
 	"/node_modules/",
 ];
+
+/**
+ * Where the debounce sentinel lives: QMD_REFRESH_SENTINEL when set (tests point
+ * it at a temp file so parallel workers don't race on the shared one), else
+ * beside the hook scripts. Empty counts as unset (lib/env-path.ts, #360).
+ */
+export function sentinelPathFrom(env: Readonly<Record<string, string | undefined>>, scriptDir: string): string {
+	return envPath(env, "QMD_REFRESH_SENTINEL", join(scriptDir, ".qmd-refresh-sentinel"));
+}
 
 /**
  * Return true if a Write/Edit to `filePath` should trigger a QMD refresh.
