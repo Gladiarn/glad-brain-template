@@ -16,6 +16,7 @@ import {
 	isUnknownSubcommandFailure,
 	legacyCollectionCandidate,
 } from "../lib/qmd-bootstrap.ts";
+import { spawnQmd } from "../../../.scripts/qmd-bootstrap.ts";
 
 describe("buildCollectionAddArgs", () => {
 	test("emits the exact argv shape qmd's `collection add` expects", () => {
@@ -322,5 +323,17 @@ describe("isUnknownSubcommandFailure", () => {
 			false,
 		);
 		assert.equal(isUnknownSubcommandFailure({ stdout: "", stderr: "" }), false);
+	});
+});
+
+// Through the spawn seam, so no qmd starts here.
+describe("spawnQmd", () => {
+	test("starts qmd with windowsHide, so a console-less bootstrap opens no window (#381)", () => {
+		let hidden: boolean | undefined;
+		spawnQmd("qmd.js", ["--version"], (_cmd, _args, options) => {
+			hidden = options.windowsHide;
+			return { status: 0, signal: null, stdout: "", stderr: "" };
+		});
+		assert.equal(hidden, true);
 	});
 });

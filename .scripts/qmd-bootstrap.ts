@@ -28,7 +28,7 @@
  *   node --experimental-strip-types .scripts/qmd-bootstrap.ts
  */
 
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncOptionsWithStringEncoding, type SpawnSyncReturns } from "node:child_process";
 import { readFileSync } from "node:fs";
 
 import { warn } from "../.claude/scripts/lib/hook-io.ts";
@@ -96,14 +96,23 @@ type SpawnOutcome = {
 /**
  * Run qmd and capture both streams so callers can classify failures.
  * Captured output is echoed to the user afterward so the visible log matches
- * `stdio: "inherit"` ordering.
+ * `stdio: "inherit"` ordering. `spawn` is a seam for tests, which check the
+ * options without starting qmd.
  */
-function spawnQmd(
+export function spawnQmd(
 	entry: string | null,
 	subcommandArgs: readonly string[],
+	spawn: (
+		cmd: string,
+		args: string[],
+		options: SpawnSyncOptionsWithStringEncoding,
+	) => Pick<SpawnSyncReturns<string>, "status" | "signal" | "stdout" | "stderr"> = spawnSync,
 ): SpawnOutcome {
 	const { cmd, args, shell } = buildQmdCommand(entry, subcommandArgs);
-	const r = spawnSync(cmd, args as string[], { shell, encoding: "utf-8" });
+	// windowsHide: session-start starts this bootstrap detached, so it has no
+	// console, and on Windows a console program started from it without the
+	// flag opens a console window of its own (#381).
+	const r = spawn(cmd, args as string[], { shell, encoding: "utf-8", windowsHide: true });
 	return {
 		status: r.status,
 		signal: r.signal,
