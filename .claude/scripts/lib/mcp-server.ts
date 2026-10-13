@@ -13,7 +13,7 @@
  */
 
 import { readFileSync, realpathSync } from "node:fs";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 
 import type { VaultContext } from "./mcp-context.ts";
 import { INSTRUCTIONS, PROMPTS } from "./mcp-context.ts";
@@ -45,7 +45,7 @@ import { validateMemory, writeMemory, renderMemory, resolveLinks, neutralizeWiki
 import { findSimilar } from "./memory-similarity.ts";
 import { markSuperseded, resolveSupersedes } from "./memory-supersede.ts";
 import { health } from "./memory-discover.ts";
-import { resolveQmdEntry, buildQmdCommand } from "./qmd.ts";
+import { resolveQmdEntry, buildQmdCommand, spawnDetachedQmd } from "./qmd.ts";
 import {
 	resolveReasonConfig,
 	reasonUsage,
@@ -145,18 +145,26 @@ export function missingRequired(tool: string | undefined, args: Record<string, u
  * retrievable at all and is synchronous and bounded; `embed` only decides where
  * it ranks and is detached, because it runs a local model.
  */
-export function reindexSync(indexName: string | null): boolean {
-	const run = (sub: string): boolean => {
-		try {
-			const entry = resolveQmdEntry();
-			const args = indexName ? ["--index", indexName, sub] : [sub];
-			const { cmd, args: argv, shell } = buildQmdCommand(entry, args);
-			const r = spawnSync(cmd, [...argv], { shell, timeout: REINDEX_TIMEOUT_MS, stdio: "ignore" });
-			return r.status === 0;
-		} catch {
-			return false;
-		}
-	};
+export function reindexSync(
+	indexName: string | null,
+	deps: { readonly run?: (sub: string) => boolean; readonly spawnEmbed?: (args: readonly string[]) => void } = {},
+): boolean {
+	const qmdArgs = (sub: string): string[] => (indexName ? ["--index", indexName, sub] : [sub]);
+	const run =
+		deps.run ??
+		((sub: string): boolean => {
+			try {
+				const { cmd, args: argv, shell } = buildQmdCommand(resolveQmdEntry(), qmdArgs(sub));
+				const r = spawnSync(cmd, [...argv], { shell, timeout: REINDEX_TIMEOUT_MS, stdio: "ignore" });
+				return r.status === 0;
+			} catch {
+				return false;
+			}
+		});
+	// spawnDetachedQmd honours VAULT_QMD_REFRESH=off, which every test process
+	// carries: the embed is skipped, the update above still runs (#347).
+	const spawnEmbed =
+		deps.spawnEmbed ?? ((args: readonly string[]) => void spawnDetachedQmd(buildQmdCommand(resolveQmdEntry(), args), "om-mcp"));
 
 	// `update` indexes the text and is what makes the note retrievable at all, so
 	// it is synchronous: reporting "recorded" before that is a lie the caller
@@ -170,10 +178,7 @@ export function reindexSync(indexName: string | null): boolean {
 	// of that group. Waiting on a local model run for ordering that corrects
 	// itself moments later buys nothing: measured, it was most of the write.
 	try {
-		const entry = resolveQmdEntry();
-		const args = indexName ? ["--index", indexName, "embed"] : ["embed"];
-		const { cmd, args: argv, shell } = buildQmdCommand(entry, args);
-		spawn(cmd, [...argv], { shell, detached: true, stdio: "ignore" }).unref();
+		spawnEmbed(qmdArgs("embed"));
 	} catch {
 		/* ranking quality is best-effort; retrieval already works without it */
 	}
