@@ -4,40 +4,40 @@ Thanks for your interest in contributing to obsidian-mind!
 
 ## Quick Start
 
-1. Pick an issue labelled `help wanted` or `good first issue` (see [Picking up an issue](#picking-up-an-issue)), or open one for what you have in mind
-2. Comment on the issue that you're taking it, then fork the repo and create a branch from `main`
-3. Make your changes
-4. Open a PR with a title following the [commit format](#pr-title-format)
-5. The maintainer will review, then merge, request changes, or close with context
+Issues and bug reports are welcome from anyone. Code contributions go through assignment:
+
+1. Find or open an issue, and comment on it that you'd like to work on it
+2. Wait for the maintainer to assign it to you (an issue is assigned when it fits the project's plans)
+3. Fork the repo and create a branch from `main`
+4. Make your changes. A code change comes with a test that fails on `main` and passes with it
+5. Open a PR with a title following the [commit format](#pr-title-format), linking the issue
+6. Once CI is green and, for a code change, the PR shows that test, the maintainer reviews it, then merges, requests changes, or closes it with context
+
+A PR for an issue that isn't assigned to you is closed without review. Trivial typo fixes in documentation are the only exception.
 
 ## Before You Open a PR
 
-**Small changes can go straight to PR.** Typos, fixes, one-file updates, doc corrections. Just open it.
-
-**Bigger changes should start with an issue.** This includes:
+**Small fixes need an assigned issue too.** For bigger changes, agree the approach on the issue before writing code, such as:
 
 - Rewrites, migrations, or language swaps
 - New commands, agents, hooks, or vault structure
 - Anything that touches the install story or runtime requirements
 - Anything listed as self-owned in the [Roadmap](README.md#roadmap) section of the README
 
-Some areas have ongoing work that isn't public yet. Opening an issue first lets us check whether the direction is already on the roadmap before you write code. Saves you from building something that can't be merged.
+Some areas have ongoing work that isn't public yet, so the issue is where we check the direction against the roadmap. Saves you from building something that can't be merged.
 
 ## Picking up an issue
 
-Every open issue tells you whether it's open for contributions:
+An issue's assignee is the one person whose PR for it gets reviewed.
 
 | Label | What it means |
 |---|---|
-| `good first issue` | Small and self-contained. A good way in. |
-| `help wanted` | Self-contained, with the problem, the cause and how to test the fix written in the issue. Go for it. |
-| `maintainer` | Sequenced or cross-cutting work the maintainer is building, usually because other changes depend on it or it changes something every session relies on. Please don't open a PR for these. If you want to help, comment on the issue. |
+| `maintainer` | Work the maintainer is building or sequencing. Please don't open a PR for these. If you'd like to help, ask on the issue. |
 | `decision` | The deliverable is a ruling, not code. See [below](#some-issues-are-questions-and-they-close-differently). |
-| no label | Not triaged yet. Ask on the issue before starting. |
 
 A few things that save everyone time:
 
-- **Say you're on it.** Leave a one-line comment before you start, so two people don't build the same fix.
+- **Ask to be assigned, then wait.** Comment on the issue before you start. The assignment means two people don't build the same fix, and that the fix is wanted.
 - **Build what the issue says.** Many issues here carry measurements, decisions and an explicit scope. If you think part of it is wrong, say so on the issue first; the issue gets updated before the code changes.
 - **Move text as written, don't rewrite it.** When an issue says content moves between files (for example out of an instruction file), carry it over unchanged. Summarising or shortening it along the way drops rules that agents rely on, even when the result reads fine.
 - **Tick only what you ran.** The PR checklist is read literally. If you couldn't run something, leave the box unticked and say why. That's fine, and far more useful than a tick.
@@ -118,6 +118,8 @@ The release pipeline handles these automatically — **do not include in your PR
 ## Before Submitting
 
 - [ ] PR title follows `type: description` format
+- [ ] Links an issue assigned to you, or is a trivial typo fix in documentation
+- [ ] A code change comes with a test that fails on `main` and passes with it
 - [ ] Counts match everywhere (commands, agents) if you added/removed any
 - [ ] New command/agent appears in ALL doc tables (README + Skills.md, and `.claude/rules/subagents.md` for an agent)
 - [ ] Translations flagged if you changed README.md (maintainer can handle these)
@@ -165,4 +167,4 @@ A self-test that does not exit 0 means the gate is broken: fix it before trustin
 
 ## Questions?
 
-Open an issue or start a discussion. For small changes, PRs are welcome directly. For anything bigger, see [Before You Open a PR](#before-you-open-a-pr), and check the issue's label first ([Picking up an issue](#picking-up-an-issue)).
+Open an issue or start a discussion. To contribute code, see [Quick Start](#quick-start).
