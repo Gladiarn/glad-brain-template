@@ -39,7 +39,7 @@
  * Run it by hand on any Claude Code version before it is recommended, with a
  * logged-in `claude`:
  *
- *   node --experimental-strip-types .github/scripts/delivery-gate.ts [--trusted-dir <dir>] [--file-issue] [--hooks-only] [--model opus] [--claude <bin>]
+ *   node --experimental-strip-types .github/scripts/delivery-gate.ts [--trusted-dir <dir>] [--file-issue] [--hooks-only] [--model <full model id>] [--claude <bin>]
  *
  * `--trusted-dir` loads the mod the way a user gets it: found in the vault's
  * `.claude/skills/` after the workspace-trust prompt, which a headless session
@@ -89,6 +89,12 @@ const FIXTURE_MIN_CHARS = Math.round(HOOK_CAP_CHARS * 1.2);
 const SESSION_BUDGET_USD = "5";
 /** How long one turn may take before the session is abandoned. */
 const TURN_TIMEOUT_MS = 5 * 60_000;
+/**
+ * The model the gate asks for when `--model` isn't given: a full id, because a
+ * bare alias is not honoured for every model and can silently run another
+ * (#346). Update it when a newer model ships.
+ */
+export const DEFAULT_MODEL = "claude-opus-5-5";
 
 /** What a checkpoint's answer must contain: the context's last line, and the middle marker when the context carries one. */
 export type Expected = { readonly line: string; readonly marker: string | null };
@@ -278,6 +284,7 @@ type StreamEvent = {
 	tool_use_result?: { content?: unknown; totalToolUseCount?: number; agentType?: string };
 	is_error?: boolean;
 	result?: string;
+	model?: string;
 };
 
 const textOf = (content: unknown): string =>
@@ -294,6 +301,42 @@ export function subagentReport(handedBack: string): string {
 	const body = handedBack.slice(start + "The report follows:".length);
 	const end = body.search(/\nagentId:/);
 	return (end < 0 ? body : body.slice(0, end)).trim();
+}
+
+/**
+ * The models a session's stream says ran: the `model` of each `system`/`init`
+ * event, once each, in order. Read so the gate can say what actually answered:
+ * a bare alias is not honoured for every model, and a mismatch would judge
+ * delivery on one model while the run is labelled with another (#346).
+ */
+export function modelsRan(streamJson: string): string[] {
+	const seen: string[] = [];
+	for (const line of streamJson.split("\n")) {
+		let event: StreamEvent;
+		try {
+			event = JSON.parse(line);
+		} catch {
+			continue;
+		}
+		if (event.type === "system" && event.subtype === "init" && typeof event.model === "string" && !seen.includes(event.model)) {
+			seen.push(event.model);
+		}
+	}
+	return seen;
+}
+
+/** Whether every session reported running the model asked for. */
+export function ranAsAsked(asked: string, ran: readonly string[]): boolean {
+	return ran.length > 0 && ran.every((m) => m === asked);
+}
+
+/** The line that says which model answered, and flags one that isn't the model asked for. */
+export function modelNote(asked: string, ran: readonly string[]): string {
+	if (ran.length === 0) return `Could not tell which model answered (asked for ${asked}).`;
+	const other = ran.filter((m) => m !== asked);
+	return other.length === 0
+		? `Model that answered: ${asked}.`
+		: `⚠️  Asked for ${asked}, but the sessions ran ${ran.join(", ")}: these verdicts are for ${other.join(", ")}.`;
 }
 
 /** Split a stream-json transcript into turns, one per `result` event. Events before the first result belong to the first turn. */
@@ -759,7 +802,11 @@ function session(
 }
 
 /** One fresh fixture per session, checked before any turn is spent on it. */
-async function runSession(steps: readonly Step[], breakage: Breakage, options: SessionOptions): Promise<Verdict[]> {
+async function runSession(
+	steps: readonly Step[],
+	breakage: Breakage,
+	options: SessionOptions,
+): Promise<{ verdicts: Verdict[]; models: string[] }> {
 	const marker = newMarker();
 	const vault = buildFixture(breakage, { marker, trustedDir: options.trustedDir, withMod: options.withMod });
 	try {
@@ -784,12 +831,13 @@ async function runSession(steps: readonly Step[], breakage: Breakage, options: S
 			expectedByStep[index] = expectFor(step);
 		});
 		// Steps never sent (the session stopped early) are INVALID whatever their expectation.
-		return judge(
+		const verdicts = judge(
 			steps,
 			parseTurns(transcript),
 			steps.map((_, i) => expectedByStep[i] ?? ""),
 			{ withMod: options.withMod, ending },
 		);
+		return { verdicts, models: modelsRan(transcript) };
 	} finally {
 		removeFixture(vault);
 	}
@@ -861,12 +909,18 @@ async function main(): Promise<void> {
 	const selfTest = argv.includes("--self-test");
 	const hooksOnly = argv.includes("--hooks-only");
 	const trustedDir = flag("--trusted-dir");
-	const base = { claude: flag("--claude") ?? "claude", model: flag("--model") ?? "opus", ...(trustedDir ? { trustedDir: resolve(trustedDir) } : {}) };
+	const base = { claude: flag("--claude") ?? "claude", model: flag("--model") ?? DEFAULT_MODEL, ...(trustedDir ? { trustedDir: resolve(trustedDir) } : {}) };
 	const version = spawnSync(base.claude, ["--version"], { encoding: "utf8" }).stdout?.trim() || "unknown version";
 	process.on("SIGINT", () => {
 		for (const vault of [...fixtures.keys()]) removeFixture(vault);
 		process.exit(130);
 	});
+	const modelsSeen = new Set<string>();
+	const run = async (steps: readonly Step[], breakage: Breakage, withMod: boolean): Promise<Verdict[]> => {
+		const r = await runSession(steps, breakage, { ...base, withMod });
+		for (const model of r.models) modelsSeen.add(model);
+		return r.verdicts;
+	};
 	const loading = trustedDir ? `found in the trusted folder ${resolve(trustedDir)}` : "loaded with --plugin-dir";
 	console.log(`Delivery gate · ${version} · ${base.model} · ${hooksOnly ? "settings hooks only" : `the mod ${loading}`}${selfTest ? " · SELF-TEST" : ""}\n`);
 
@@ -874,20 +928,22 @@ async function main(): Promise<void> {
 		const runs: Array<{ breakage: Breakage; verdicts: Verdict[] }> = [];
 		for (const breakage of ["cut", "startup-only"] as const) {
 			const verdicts: Verdict[] = [];
-			for (const steps of plan(true)) verdicts.push(...(await runSession(steps, breakage, { ...base, withMod: true })));
+			for (const steps of plan(true)) verdicts.push(...(await run(steps, breakage, true)));
 			print(` [${breakage}]`, verdicts);
 			runs.push({ breakage, verdicts });
 		}
 		const { exitCode, message } = selfTestOutcome(runs);
 		console.log(`\n${message}`);
-		process.exitCode = exitCode;
+		console.log(modelNote(base.model, [...modelsSeen]));
+		process.exitCode = ranAsAsked(base.model, [...modelsSeen]) ? exitCode : 2;
 		return;
 	}
 
 	const verdicts: Verdict[] = [];
-	if (!hooksOnly) for (const steps of plan(true)) verdicts.push(...(await runSession(steps, "none", { ...base, withMod: true })));
-	for (const steps of plan(false)) verdicts.push(...(await runSession(steps, "none", { ...base, withMod: false })));
+	if (!hooksOnly) for (const steps of plan(true)) verdicts.push(...(await run(steps, "none", true)));
+	for (const steps of plan(false)) verdicts.push(...(await run(steps, "none", false)));
 	print("", verdicts);
+	console.log(`\n${modelNote(base.model, [...modelsSeen])}`);
 	const invalid = verdicts.filter((v) => v.outcome === "INVALID").length;
 	const failed = verdicts.filter((v) => v.outcome === "FAIL").length;
 	if (invalid > 0) console.log(`\n${invalid} checkpoint(s) could not be judged.`);
@@ -903,7 +959,8 @@ async function main(): Promise<void> {
 		console.log(filed.status === 0 ? `\nFiled: ${filed.stdout.trim()}` : `\nCould not file the issue: ${filed.stderr.trim()}`);
 	}
 	// A FAIL needs nothing else to be judged: it wins over an INVALID elsewhere.
-	process.exitCode = failed > 0 ? 1 : invalid > 0 ? 2 : 0;
+	// A run that can't show it ran the model asked for can't be judged either (#346).
+	process.exitCode = failed > 0 ? 1 : invalid > 0 || !ranAsAsked(base.model, [...modelsSeen]) ? 2 : 0;
 }
 
 if (isMainModule(import.meta.url)) {

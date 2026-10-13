@@ -30,6 +30,10 @@ import {
 	quotes,
 	selfTestOutcome,
 	sessionDirs,
+	DEFAULT_MODEL,
+	modelsRan,
+	modelNote,
+	ranAsAsked,
 	subagentReport,
 	SUBAGENT_TASK,
 	type Step,
@@ -522,5 +526,44 @@ describe("delivery gate: self-test and environment", () => {
 		);
 		const both = sessionDirs("/var/folders/om-delivery-gate-x", { CLAUDE_CONFIG_DIR: "/cfg" }, () => "/private/var/folders/om-delivery-gate-x");
 		assert.equal(both.length, 4, "the created and the resolved path are both slugged");
+	});
+});
+
+/**
+ * The model the gate asks for, and the one that answered (#346). A bare alias
+ * is not honoured by the CLI for every model: `--model haiku` silently ran
+ * another model (recorded on the `reason` tool), so a gate labelled "opus"
+ * could judge delivery on something else. The default is a full model id, and
+ * the gate reads the model each session reports so a mismatch shows.
+ */
+describe("the gate's model", () => {
+	test("the default is a full model id, not a bare alias", () => {
+		assert.match(DEFAULT_MODEL, /^claude-[a-z]+-\d/);
+		assert.ok(!["opus", "sonnet", "haiku"].includes(DEFAULT_MODEL));
+	});
+
+	test("modelsRan reads the model each session's init event reports, once each", () => {
+		const stream = [
+			JSON.stringify({ type: "system", subtype: "init", model: "claude-opus-5-5" }),
+			JSON.stringify({ type: "assistant", message: { content: [] } }),
+			JSON.stringify({ type: "system", subtype: "init", model: "claude-opus-5-5" }),
+			"not json",
+			JSON.stringify({ type: "system", subtype: "hook_response", model: "ignored" }),
+		].join("\n");
+		assert.deepEqual(modelsRan(stream), ["claude-opus-5-5"]);
+		assert.deepEqual(modelsRan(""), []);
+	});
+
+	test("modelNote names the model that answered, and flags one that isn't the model asked for", () => {
+		assert.equal(modelNote("claude-opus-5-5", ["claude-opus-5-5"]), "Model that answered: claude-opus-5-5.");
+		assert.match(modelNote("opus", ["claude-sonnet-5"]), /Asked for opus, but the sessions ran claude-sonnet-5: these verdicts are for claude-sonnet-5/);
+		assert.match(modelNote("claude-opus-5-5", []), /Could not tell which model answered/);
+	});
+
+	test("ranAsAsked: a run that can't show it ran the model asked for can't be judged", () => {
+		assert.equal(ranAsAsked("claude-opus-5-5", ["claude-opus-5-5"]), true);
+		assert.equal(ranAsAsked("opus", ["claude-sonnet-5"]), false);
+		assert.equal(ranAsAsked("claude-opus-5-5", ["claude-opus-5-5", "claude-sonnet-5"]), false);
+		assert.equal(ranAsAsked("claude-opus-5-5", []), false, "no model reported");
 	});
 });
