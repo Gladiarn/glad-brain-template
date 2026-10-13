@@ -16,14 +16,17 @@
  * this .ts helper at Node's `--experimental-strip-types` runtime. The two
  * copies are asserted independently: `tests/qmd.test.ts` locks this file's
  * `resolveQmdEntry` + `buildQmdCommand` shape, and `tests/qmd-mcp.test.ts`
- * locks the .mjs wrapper's equivalents. Drift between the two shows up as
- * a test failure on the CI matrix rather than a silent platform bug.
+ * locks the .mjs wrapper's equivalents; `tests/qmd.test.ts` also runs
+ * `pickQmdEntry` and `npmGlobalRoot` against both copies. Drift between the
+ * two shows up as a test failure on the CI matrix rather than a silent
+ * platform bug.
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { createRequire } from "node:module";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { debug } from "./hook-io.ts";
 
 const require = createRequire(import.meta.url);
@@ -93,7 +96,124 @@ function localQmdEntry(): string | null {
 	}
 }
 
+/** What `npmGlobalRoot` reads; each defaults to this process, so tests need no real npm install. */
+export interface NpmLocation {
+	readonly env?: Readonly<Record<string, string | undefined>>;
+	readonly platform?: string;
+	readonly execPath?: string;
+	readonly home?: string;
+	/** A file's text, or null when it can't be read. */
+	readonly readText?: (path: string) => string | null;
+}
+
+function readTextOrNull(path: string): string | null {
+	try {
+		return readFileSync(path, "utf8");
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Where npm keeps global packages, without spawning it (#349): `npm root -g`
+ * is a shell plus a Node start on every resolve (0.1-1 s on CI runners,
+ * measured 2026-10-13, #349). Only the
+ * cheap exact cases are worked out here; anything else returns null, and the
+ * caller asks npm, which gives its exact answer at the old cost.
+ *
+ * 1. npm_config_prefix in the env (any case): use it if it's an absolute path
+ *    with no `${`, else ask npm.
+ * 2. PREFIX, DESTDIR, npm_config_userconfig or npm_config_globalconfig set →
+ *    ask npm.
+ * 3. ~/.npmrc (HOME before the OS home) or `<node prefix>/etc/npmrc` has a
+ *    line setting `prefix` or `globalconfig`, sections included, or a key
+ *    built from `${…}` → ask npm. An npmrc with only auth or registry lines
+ *    (or `save-prefix`) doesn't count.
+ * 4. The builtin npmrc: on Windows, the installer's exact
+ *    `prefix=${APPDATA}\npm` → %APPDATA%\npm. Any other line there setting
+ *    `prefix`, `globalconfig` or `userconfig` (which moves the user npmrc),
+ *    or a key built from `${…}` → ask npm.
+ * 5. Otherwise Node's own prefix.
+ *
+ * 4 and 5 hold only when npm sits beside this Node; where it doesn't
+ * (Homebrew, Debian's packaged npm), ask npm. Env values are read as npm
+ * reads them: trimmed, empty ones skipped, the last of several winning.
+ *
+ * Packages sit in `<prefix>\node_modules` on Windows and
+ * `<prefix>/lib/node_modules` elsewhere.
+ */
+export function npmGlobalRoot(at: NpmLocation = {}): string | null {
+	const vars = at.env ?? process.env;
+	const win = (at.platform ?? process.platform) === "win32";
+	const execPath = at.execPath ?? process.execPath;
+	const home = at.home ?? (vars["HOME"] || homedir());
+	const readText = at.readText ?? readTextOrNull;
+	// As npm's loadEnv reads it: any case, trimmed, empty skipped, the last one winning.
+	const npmConfig = (key: string): string | undefined => {
+		const want = `npm_config_${key}`;
+		let found: string | undefined;
+		for (const [name, value] of Object.entries(vars)) {
+			if (name.toLowerCase() === want && value?.trim()) found = value.trim();
+		}
+		return found;
+	};
+	const lines = (file: string): string[] =>
+		(readText(file) ?? "").split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "" && !/^[;#]/.test(l));
+	// A line setting prefix or globalconfig, sections included, or one whose
+	// key npm would expand from the environment and so can't be read here.
+	const settingLines = (file: string): string[] =>
+		lines(file).filter((l) => /^(prefix|globalconfig)\s*=/i.test(l) || /\$\{[^=]*=/.test(l));
+	// Absolute in npm's sense: on a Windows host, `\npm` is drive-relative.
+	const exactPath = (value: string): boolean =>
+		isAbsolute(value) && !value.includes("${") && (process.platform !== "win32" || !/^[\\/](?![\\/])/.test(value));
+	const layout = (prefix: string): string => (win ? join(prefix, "node_modules") : join(prefix, "lib", "node_modules"));
+
+	// 1.
+	const fromEnv = npmConfig("prefix");
+	if (fromEnv !== undefined) return exactPath(fromEnv) ? layout(fromEnv) : null;
+
+	// 2.
+	if (vars["PREFIX"] || vars["DESTDIR"] || npmConfig("userconfig") !== undefined || npmConfig("globalconfig") !== undefined) {
+		return null;
+	}
+
+	// 3.
+	const nodePrefix = win ? dirname(execPath) : dirname(dirname(execPath));
+	if (settingLines(join(home, ".npmrc")).length > 0 || settingLines(join(nodePrefix, "etc", "npmrc")).length > 0) {
+		return null;
+	}
+
+	// 4 and 5 hold only for the npm that sits beside this Node; Homebrew and
+	// Debian keep npm (and its builtin npmrc) elsewhere, so ask npm there.
+	const npmDir = join(win ? nodePrefix : join(nodePrefix, "lib"), "node_modules", "npm");
+	if (readText(join(npmDir, "package.json")) === null) return null;
+
+	// 4.
+	const builtin = lines(join(npmDir, "npmrc")).filter(
+		(l) => /^(prefix|globalconfig|userconfig)\s*=/i.test(l) || /\$\{[^=]*=/.test(l),
+	);
+	if (builtin.length === 0) return layout(nodePrefix); // 5.
+	const appdata = vars["APPDATA"];
+	if (!win || builtin.length !== 1 || builtin[0] !== "prefix=${APPDATA}\\npm" || !appdata || !exactPath(appdata)) {
+		return null;
+	}
+	// npm's global npmrc then lives under that prefix.
+	const prefix = join(appdata, "npm");
+	return settingLines(join(prefix, "etc", "npmrc")).length > 0 ? null : layout(prefix);
+}
+
+/** @tobilu/qmd's entry under a global root, when it is there. */
+function qmdEntryUnder(root: string): string | null {
+	const entry = join(root, "@tobilu", "qmd", "dist", "cli", "qmd.js");
+	return existsSync(entry) ? entry : null;
+}
+
 function globalQmdEntry(): string | null {
+	// Where npm would put a global install, without spawning npm (#349).
+	const computed = npmGlobalRoot();
+	const known = computed === null ? null : qmdEntryUnder(computed);
+	if (known !== null) return known;
+
 	// Fallback for global npm installs that aren't on this package's resolution
 	// path — ask npm directly where global packages live. Bounded timeout so a
 	// hung npm process can't block a fire-and-forget hook indefinitely.
@@ -103,10 +223,13 @@ function globalQmdEntry(): string | null {
 	// shell:true (the args get concatenated into the shell command unescaped,
 	// a real injection risk in the general case). Our command is a literal
 	// constant — no user input — so the concatenated form is safe.
+	// windowsHide: under a detached, windowless parent (the bootstrap that
+	// session-start spawns), a shell started without it opens a console window.
 	const npmRoot = spawnSync("npm root -g", {
 		shell: true,
 		encoding: "utf8",
 		timeout: 3000,
+		windowsHide: true,
 	});
 	if (npmRoot.error || npmRoot.signal !== null || npmRoot.status !== 0) {
 		return null;
@@ -114,9 +237,7 @@ function globalQmdEntry(): string | null {
 
 	const root = (npmRoot.stdout ?? "").trim();
 	if (root === "" || !isAbsolute(root)) return null;
-
-	const entry = join(root, "@tobilu", "qmd", "dist", "cli", "qmd.js");
-	return existsSync(entry) ? entry : null;
+	return qmdEntryUnder(root);
 }
 
 /**

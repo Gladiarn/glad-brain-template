@@ -23,6 +23,13 @@ export function pickQmdEntry(
 export function isRunnableQmdEntry(entry: string): boolean;
 
 /**
+ * Where npm keeps global packages, without spawning npm, in the five cheap
+ * exact cases lib/qmd.ts's npmGlobalRoot lists. Null means "ask npm", not
+ * "no global npm".
+ */
+export function npmGlobalRoot(at?: import("./lib/qmd.ts").NpmLocation): string | null;
+
+/**
  * Resolve the vault root directory from a `file://` URL and optional env.
  * The env argument is read for `CLAUDE_PROJECT_DIR` (Claude Code's
  * project-dir signal); when absent, the root is computed from the URL.

@@ -126,7 +126,116 @@ function localQmdEntry() {
 	}
 }
 
+function readTextOrNull(path) {
+	try {
+		return readFileSync(path, "utf8");
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * The duplicate of lib/qmd.ts's npmGlobalRoot, kept in step by hand: change
+ * that one first, then carry the change here with the types removed.
+ *
+ * Where npm keeps global packages, without spawning it (#349): `npm root -g`
+ * is a shell plus a Node start on every resolve (0.1-1 s on CI runners,
+ * measured 2026-10-13, #349). Only the
+ * cheap exact cases are worked out here; anything else returns null, and the
+ * caller asks npm, which gives its exact answer at the old cost.
+ *
+ * 1. npm_config_prefix in the env (any case): use it if it's an absolute path
+ *    with no `${`, else ask npm.
+ * 2. PREFIX, DESTDIR, npm_config_userconfig or npm_config_globalconfig set →
+ *    ask npm.
+ * 3. ~/.npmrc (HOME before the OS home) or `<node prefix>/etc/npmrc` has a
+ *    line setting `prefix` or `globalconfig`, sections included, or a key
+ *    built from `${…}` → ask npm. An npmrc with only auth or registry lines
+ *    (or `save-prefix`) doesn't count.
+ * 4. The builtin npmrc: on Windows, the installer's exact
+ *    `prefix=${APPDATA}\npm` → %APPDATA%\npm. Any other line there setting
+ *    `prefix`, `globalconfig` or `userconfig` (which moves the user npmrc),
+ *    or a key built from `${…}` → ask npm.
+ * 5. Otherwise Node's own prefix.
+ *
+ * 4 and 5 hold only when npm sits beside this Node; where it doesn't
+ * (Homebrew, Debian's packaged npm), ask npm. Env values are read as npm
+ * reads them: trimmed, empty ones skipped, the last of several winning.
+ *
+ * Packages sit in `<prefix>\node_modules` on Windows and
+ * `<prefix>/lib/node_modules` elsewhere.
+ */
+export function npmGlobalRoot(at = {}) {
+	const vars = at.env ?? process.env;
+	const win = (at.platform ?? process.platform) === "win32";
+	const execPath = at.execPath ?? process.execPath;
+	const home = at.home ?? (vars["HOME"] || homedir());
+	const readText = at.readText ?? readTextOrNull;
+	// As npm's loadEnv reads it: any case, trimmed, empty skipped, the last one winning.
+	const npmConfig = (key) => {
+		const want = `npm_config_${key}`;
+		let found;
+		for (const [name, value] of Object.entries(vars)) {
+			if (name.toLowerCase() === want && value?.trim()) found = value.trim();
+		}
+		return found;
+	};
+	const lines = (file) =>
+		(readText(file) ?? "").split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "" && !/^[;#]/.test(l));
+	// A line setting prefix or globalconfig, sections included, or one whose
+	// key npm would expand from the environment and so can't be read here.
+	const settingLines = (file) =>
+		lines(file).filter((l) => /^(prefix|globalconfig)\s*=/i.test(l) || /\$\{[^=]*=/.test(l));
+	// Absolute in npm's sense: on a Windows host, `\npm` is drive-relative.
+	const exactPath = (value) =>
+		isAbsolute(value) && !value.includes("${") && (process.platform !== "win32" || !/^[\\/](?![\\/])/.test(value));
+	const layout = (prefix) => (win ? join(prefix, "node_modules") : join(prefix, "lib", "node_modules"));
+
+	// 1.
+	const fromEnv = npmConfig("prefix");
+	if (fromEnv !== undefined) return exactPath(fromEnv) ? layout(fromEnv) : null;
+
+	// 2.
+	if (vars["PREFIX"] || vars["DESTDIR"] || npmConfig("userconfig") !== undefined || npmConfig("globalconfig") !== undefined) {
+		return null;
+	}
+
+	// 3.
+	const nodePrefix = win ? dirname(execPath) : dirname(dirname(execPath));
+	if (settingLines(join(home, ".npmrc")).length > 0 || settingLines(join(nodePrefix, "etc", "npmrc")).length > 0) {
+		return null;
+	}
+
+	// 4 and 5 hold only for the npm that sits beside this Node; Homebrew and
+	// Debian keep npm (and its builtin npmrc) elsewhere, so ask npm there.
+	const npmDir = join(win ? nodePrefix : join(nodePrefix, "lib"), "node_modules", "npm");
+	if (readText(join(npmDir, "package.json")) === null) return null;
+
+	// 4.
+	const builtin = lines(join(npmDir, "npmrc")).filter(
+		(l) => /^(prefix|globalconfig|userconfig)\s*=/i.test(l) || /\$\{[^=]*=/.test(l),
+	);
+	if (builtin.length === 0) return layout(nodePrefix); // 5.
+	const appdata = vars["APPDATA"];
+	if (!win || builtin.length !== 1 || builtin[0] !== "prefix=${APPDATA}\\npm" || !appdata || !exactPath(appdata)) {
+		return null;
+	}
+	// npm's global npmrc then lives under that prefix.
+	const prefix = join(appdata, "npm");
+	return settingLines(join(prefix, "etc", "npmrc")).length > 0 ? null : layout(prefix);
+}
+
+/** @tobilu/qmd's entry under a global root, when it is there. */
+function qmdEntryUnder(root) {
+	const entry = join(root, "@tobilu", "qmd", "dist", "cli", "qmd.js");
+	return existsSync(entry) ? entry : null;
+}
+
 function globalQmdEntry() {
+	// Where npm would put a global install, without spawning npm (#349).
+	const computed = npmGlobalRoot();
+	const known = computed === null ? null : qmdEntryUnder(computed);
+	if (known !== null) return known;
 
 	// Fallback for global npm installs that aren't on this package's resolution
 	// path — ask npm directly where global packages live. Bounded timeout so a
@@ -136,10 +245,12 @@ function globalQmdEntry() {
 	// stays clean on Node 24 (DEP0190 — args concatenated with shell:true is
 	// an injection risk in the general case; our command is a literal
 	// constant so the concatenated form is safe).
+	// windowsHide: under a windowless parent, a shell started without it opens a console window.
 	const npmRoot = spawnSync("npm root -g", {
 		shell: true,
 		encoding: "utf8",
 		timeout: 3000,
+		windowsHide: true,
 	});
 	if (
 		npmRoot.error ||
@@ -156,9 +267,7 @@ function globalQmdEntry() {
 	if (root === "" || !isAbsolute(root)) {
 		return null;
 	}
-
-	const entry = join(root, "@tobilu", "qmd", "dist", "cli", "qmd.js");
-	return existsSync(entry) ? entry : null;
+	return qmdEntryUnder(root);
 }
 
 /**
