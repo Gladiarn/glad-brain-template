@@ -536,6 +536,92 @@ describe("a superseded memory reaches only where its successor reaches", () => {
 });
 
 /**
+ * A correction that keeps its title (#364). The claim on the old memory names
+ * a title the old memory itself carries, so resolving it by first match could
+ * land on the memory itself, which is always served, and the stale copy was
+ * never withheld. Which way it went depended on listing order.
+ */
+describe("a correction that keeps the corrected memory's title (#364)", () => {
+	const TITLE = "tokens expire after one hour";
+	const dated = (fm: Record<string, unknown>, slug: string = String(fm["date"])): MemoryEntry => ({
+		rel: `memories/${slug} ${TITLE}.md`,
+		full: `/nowhere/${slug}.md`,
+		facets: facetsOf({ source: MEMORY_SOURCE, ...fm }),
+		title: TITLE,
+		body: "b",
+	});
+	const OLD = dated({ scope: "project", projects: ["atlas", "beta"], date: "2026-06-01", superseded_by: [TITLE] });
+	const NEW = dated({ scope: "project", projects: ["atlas"], date: "2026-07-26" });
+	const beta = { project: "beta", platforms: [] };
+	const atlas = { project: "atlas", platforms: [] };
+
+	for (const [order, corpus] of [["old first", [OLD, NEW]], ["correction first", [NEW, OLD]]] as const) {
+		test(`the caller the correction excludes gets neither copy (${order})`, () => {
+			assert.deepEqual(recallFrom(corpus, beta).map((m) => m.rel), []);
+		});
+		test(`the caller it keeps gets the correction first, the old copy sunk (${order})`, () => {
+			assert.deepEqual(recallFrom(corpus, atlas).map((m) => m.rel), [NEW.rel, OLD.rel]);
+		});
+	}
+
+	test("a three-link same-title chain retires back to its head", () => {
+		const a = dated({ scope: "general", date: "2026-06-01", superseded_by: [TITLE] });
+		const b = dated({ scope: "general", date: "2026-07-01", superseded_by: [TITLE] });
+		const c = dated({ scope: "project", projects: ["atlas"], date: "2026-08-01" });
+		for (const corpus of [[a, b, c], [c, b, a], [b, a, c]]) {
+			assert.deepEqual(recallFrom(corpus, beta).map((m) => m.rel), []);
+			const served = recallFrom(corpus, atlas).map((m) => m.rel);
+			assert.equal(served[0], c.rel, "the live correction ranks first");
+			assert.deepEqual([...served].sort(), [a.rel, b.rel, c.rel].sort());
+		}
+	});
+
+	test("a claim whose only match is the memory itself is unresolvable, so the memory stays", () => {
+		const alone = dated({ scope: "general", date: "2026-06-01", superseded_by: [TITLE] });
+		assert.deepEqual(recallFrom([alone], beta).map((m) => m.rel), [alone.rel]);
+	});
+
+	// Within one day, two retired copies would otherwise each count the other as
+	// a replacement and keep each other served; the write's timestamp orders them.
+	test("on the same day, the write's session time decides which copy is newer", () => {
+		const day = (hour: string, fm: Record<string, unknown>, slug: string) =>
+			dated({ date: "2026-07-26", session: `2026-07-26T${hour}:00:00Z`, ...fm }, slug);
+		const a = day("09", { scope: "general", superseded_by: [TITLE] }, "a");
+		const b = day("12", { scope: "general", superseded_by: [TITLE] }, "b");
+		const c = day("17", { scope: "project", projects: ["atlas"] }, "c");
+		assert.deepEqual(recallFrom([a, b, c], beta).map((m) => m.rel), []);
+		assert.deepEqual(recallFrom([c, b, a], beta).map((m) => m.rel), []);
+	});
+
+	test("an undated side is never ruled out as older, so the rule still applies", () => {
+		const undated = dated({ scope: "project", projects: ["atlas"] }, "undated");
+		assert.deepEqual(recallFrom([OLD, undated], beta).map((m) => m.rel), []);
+	});
+
+	// `date` is the writer's local day and `session` its UTC time: across time
+	// zones the local day can run ahead of a later write's, so the timestamp,
+	// where both have one, decides.
+	test("a later write from a time zone whose local day runs behind is still newer", () => {
+		const old = dated({ scope: "general", date: "2026-10-14", session: "2026-10-13T16:00:00Z", superseded_by: [TITLE] }, "tokyo");
+		const fix = dated({ scope: "project", projects: ["atlas"], date: "2026-10-13", session: "2026-10-13T17:00:00Z" }, "seattle");
+		assert.deepEqual(recallFrom([old, fix], beta).map((m) => m.rel), []);
+	});
+
+	// A hand-filed memory can carry a session with an offset; compared as text it
+	// would sort by its local clock, so the timestamps are parsed.
+	test("a session written with a time-zone offset is ordered by the instant it names", () => {
+		const old = dated({ scope: "general", date: "2026-10-14", session: "2026-10-14T01:00:00+09:00", superseded_by: [TITLE] }, "offset");
+		const fix = dated({ scope: "project", projects: ["atlas"], date: "2026-10-13", session: "2026-10-13T17:00:00.000Z" }, "utc");
+		assert.deepEqual(recallFrom([old, fix], beta).map((m) => m.rel), []);
+	});
+
+	test("explain names supersession, not scope, for the withheld old copy", () => {
+		const { withheld } = recallFrom([OLD, NEW], beta, { explain: true });
+		assert.ok(withheld.find((m) => m.rel === OLD.rel)?.why?.startsWith(SUPERSEDED_OUT_OF_REACH));
+	});
+});
+
+/**
  * A capture the tool refused still has to reach someone.
  *
  * A tool call can be refused for a reason the caller cannot repair by

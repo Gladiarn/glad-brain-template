@@ -27,7 +27,7 @@ import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { MEMORY_ROOT, MEMORY_SOURCE, AGENT_SOURCES } from "./memory-write.ts";
 import { parsePromotedMarker, type PromotedRef } from "./memory-promoted.ts";
-import { resolveSupersedes } from "./memory-supersede.ts";
+import { supersedeResolver } from "./memory-supersede.ts";
 
 // Re-exported so a reader can take the marker from the module it reads with,
 // while the writer that stamps it stays the one place it is defined.
@@ -303,6 +303,22 @@ export function supersededOutOfReach(
 }
 
 /**
+ * Whether `a` was provably written before `b`: by the write's session
+ * timestamp where both have one, else by date. A side with neither, or a
+ * same-day pair missing a timestamp, is not provably older, so it is never
+ * ruled out. `session` is UTC and `date` the writer's local day, which across
+ * time zones can run ahead of a later write's, hence the timestamp first.
+ * `rankMemories` orders recency by date, then session; the two agree except
+ * across time zones and where a value is missing, which ranking sorts oldest.
+ */
+function olderThan(a: Facets, b: Facets): boolean {
+	const [ta, tb] = [Date.parse(a.session ?? ""), Date.parse(b.session ?? "")];
+	if (!Number.isNaN(ta) && !Number.isNaN(tb)) return ta < tb;
+	if (!a.date || !b.date) return false;
+	return a.date < b.date;
+}
+
+/**
  * The rels that survive both filters, resolved together rather than in sequence.
  *
  * Asking only whether a replacement is *scope-visible* is one link short of the
@@ -340,10 +356,18 @@ export function servedAfterSupersession(
 	// nothing and costs a factor of n: each pass becomes O(n²) and the fixpoint
 	// O(n³). Measured on a worst-case chain, where every pass retires exactly one
 	// link, that is 12s at 2000 memories against ~30ms hoisted.
+	const resolve = supersedeResolver(corpus);
 	const replacements = new Map<string, string[]>();
 	for (const entry of corpus) {
 		if (entry.facets.superseded_by.length === 0) continue;
-		const { matched } = resolveSupersedes(entry.facets.superseded_by, corpus);
+		// A correction that keeps its title makes the claim name the memory
+		// itself, and anything older under that title (#364). Neither replaces
+		// it: the memory itself is always served, so counting it would never
+		// withhold the stale copy, and an older one would let two retired copies
+		// keep each other served.
+		const matched = resolve(entry.facets.superseded_by).matched.filter(
+			(m) => m !== entry && !olderThan(m.facets, entry.facets),
+		);
 		// Unresolvable claims leave the memory alone, per the rule above, so they
 		// are never entered here and can never be withheld.
 		if (matched.length === 0) continue;
