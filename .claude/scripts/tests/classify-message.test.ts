@@ -7,8 +7,9 @@ import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { parseHookContext } from "../lib/hook-io.ts";
 import { takeHandoff, writeHandoff } from "../lib/stop-handoff.ts";
 import { SIGNALS } from "../lib/signals.ts";
 import { classify } from "../lib/matcher.ts";
@@ -446,12 +447,13 @@ describe("classify — the Stop report handoff", () => {
 });
 
 /**
- * After a Gemini compression (#357): Gemini's PreCompress marks the session,
- * and the next BeforeAgent hands over the session context once. Spawns
- * session-start through classify-message, so it runs on CI.
+ * After a Gemini compression (#357): Gemini's PreCompress stores the session
+ * context, and the next BeforeAgent hands it over once. Spawns session-start
+ * through pre-compact, so it runs on CI.
  */
 describe("classify-message — re-injects the session context after a Gemini compression (#357)", () => {
 	const PRE_COMPACT = resolve(dirname(fileURLToPath(import.meta.url)), "../pre-compact.ts");
+	const SESSION_START = resolve(dirname(fileURLToPath(import.meta.url)), "../session-start.ts");
 
 	/** An empty vault and a handoff folder, both temporary: session-start never reads the real repo. */
 	const withVault = (run: (env: Record<string, string>) => void): void => {
@@ -464,36 +466,70 @@ describe("classify-message — re-injects the session context after a Gemini com
 			rmTemp(root);
 		}
 	};
-	const compress = (env: Record<string, string>, sessionId: string) =>
-		spawnHook(PRE_COMPACT, { hook_event_name: "PreCompress", session_id: sessionId, trigger: "auto" }, env);
+	// PreCompress runs session-start itself, so it gets the longer budget.
+	const compress = (env: Record<string, string>, sessionId: string, extra: Record<string, unknown> = {}) =>
+		spawnHook(PRE_COMPACT, { hook_event_name: "PreCompress", session_id: sessionId, trigger: "auto", ...extra }, env, {
+			timeoutMs: 60_000,
+		});
 
-	test("PreCompress marks the session; the next prompt gets the context, the one after does not", () => {
+	test("PreCompress backs up the transcript and stores the context; the next prompt gets it, the one after does not", () => {
 		withVault((env) => {
-			assert.equal(compress(env, "gem-1").code, 0);
+			const transcript = join(env["CLAUDE_PROJECT_DIR"]!, "..", "transcript.jsonl");
+			writeFileSync(transcript, "{}\n");
+			assert.equal(compress(env, "gem-1", { transcript_path: transcript }).code, 0);
+			const logs = join(env["CLAUDE_PROJECT_DIR"]!, "thinking", "session-logs");
+			assert.equal(existsSync(logs) ? readdirSync(logs).length : 0, 1, "the backup still lands");
 
 			const prompt = { hook_event_name: "BeforeAgent", session_id: "gem-1", prompt: "hello world" };
-			const first = spawnHook(SCRIPT, prompt, env, { timeoutMs: 60_000 });
+			const first = spawnHook(SCRIPT, prompt, env);
 			assert.equal(first.code, 0);
-			const context = (JSON.parse(first.stdout) as { hookSpecificOutput: { additionalContext: string } }).hookSpecificOutput
-				.additionalContext;
-			assert.match(context, /### Date/, "session-start's context, re-injected");
+			assert.match(parseHookContext(first.stdout, "BeforeAgent"), /### Date/, "session-start's context, re-injected");
 
 			const second = spawnHook(SCRIPT, prompt, env);
 			assert.equal(second.stdout, "", "once: the next prompt gets nothing");
 		});
 	});
 
-	test("a resume after the compression takes the mark: it injects the context itself", () => {
+	test("a resume after the compression injects the full context itself, and the next prompt gets no second copy", () => {
 		withVault((env) => {
-			compress(env, "gem-2");
-			const SESSION_START = resolve(dirname(fileURLToPath(import.meta.url)), "../session-start.ts");
-			assert.equal(spawnHook(SESSION_START, { hook_event_name: "SessionStart", source: "resume", session_id: "gem-2" }, env).code, 0);
+			const resume = { hook_event_name: "SessionStart", source: "resume", session_id: "gem-2" };
+			const plain = spawnHook(SESSION_START, resume, env);
+			assert.match(parseHookContext(plain.stdout, "SessionStart"), /### Context Pointer/, "a plain resume is the compact form");
+
+			assert.equal(compress(env, "gem-2").code, 0);
+			const resumed = spawnHook(SESSION_START, resume, env);
+			assert.equal(resumed.code, 0);
+			assert.doesNotMatch(parseHookContext(resumed.stdout, "SessionStart"), /### Context Pointer/, "the full form after a compression");
 			const after = spawnHook(SCRIPT, { hook_event_name: "BeforeAgent", session_id: "gem-2", prompt: "hello world" }, env);
-			assert.equal(after.stdout, "", "no second copy of the context");
+			assert.equal(after.stdout, "");
 		});
 	});
 
-	test("Claude Code's PreCompact marks nothing: it re-injects on SessionStart compact", () => {
+	test("a backup that throws doesn't cost the re-injection", () => {
+		withVault((env) => {
+			// A file where the backup folder goes, so its mkdir throws.
+			writeFileSync(join(env["CLAUDE_PROJECT_DIR"]!, "thinking"), "");
+			const transcript = join(env["CLAUDE_PROJECT_DIR"]!, "..", "transcript.jsonl");
+			writeFileSync(transcript, "{}\n");
+			assert.equal(compress(env, "gem-3", { transcript_path: transcript }).code, 0);
+			const first = spawnHook(SCRIPT, { hook_event_name: "BeforeAgent", session_id: "gem-3", prompt: "hello world" }, env);
+			assert.match(parseHookContext(first.stdout, "BeforeAgent"), /### Date/);
+		});
+	});
+
+	test("the re-injection build starts no detached qmd update; an ordinary startup does", () => {
+		withVault((env) => {
+			const debugEnv = { ...env, HOOK_DEBUG: "1" };
+			const spawnLine = "session-start: qmd refresh off";
+			const startup = spawnHook(SESSION_START, { hook_event_name: "SessionStart", source: "startup" }, debugEnv);
+			assert.ok(startup.stderr.includes(spawnLine), "the line this test watches for is logged by an ordinary startup");
+			const build = spawnHook(SESSION_START, { hook_event_name: "SessionStart", source: "startup", om_reinject: true }, debugEnv);
+			assert.equal(build.code, 0);
+			assert.equal(build.stderr.includes(spawnLine), false, "PreCompress already started a refresh");
+		});
+	});
+
+	test("Claude Code's PreCompact stores nothing: it re-injects on SessionStart compact", () => {
 		withVault((env) => {
 			spawnHook(PRE_COMPACT, { hook_event_name: "PreCompact", session_id: "cc-1", trigger: "auto" }, env);
 			const after = spawnHook(SCRIPT, { hook_event_name: "UserPromptSubmit", session_id: "cc-1", prompt: "hello world" }, env);

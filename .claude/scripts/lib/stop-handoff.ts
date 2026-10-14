@@ -23,6 +23,10 @@
  * collected: the next prompt arrives under a new session id. Nothing is lost
  * with it. The dedupe is per session, so the new session's first Stop reports
  * the same findings again, and the prune removes the orphan after a week.
+ *
+ * The same per-session files, claim and prune also carry Gemini's stored
+ * session context after a compression (lib/reinject.ts, #357), under their
+ * own extension.
  */
 
 import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync } from "node:fs";
@@ -34,7 +38,9 @@ import { envPath } from "./env-path.ts";
 /**
  * Where a Stop report waits for the next prompt: one place for the writer
  * (stop-checklist) and the reader (classify-message), so they cannot drift
- * apart. STOP_HANDOFF_DIR routes it to a tmp path for tests.
+ * apart; Gemini's stored context (pre-compact, read by classify-message and
+ * session-start) waits beside it. STOP_HANDOFF_DIR routes it to a tmp path
+ * for tests.
  */
 export const HANDOFF_DIR = envPath(process.env, "STOP_HANDOFF_DIR", join(dirname(fileURLToPath(import.meta.url)), "..", ".stop-handoff"));
 
@@ -51,15 +57,25 @@ export function handoffPath(dir: string, sessionId: string): string {
 	return sessionFile(dir, sessionId, "txt");
 }
 
+/** Save `text` in the session's `extension` file, replacing any unread one. Throws if it cannot. */
+export function writeSessionFile(dir: string, sessionId: string, extension: string, text: string): void {
+	mkdirSync(dir, { recursive: true });
+	writeFileAtomic(sessionFile(dir, sessionId, extension), text);
+}
+
 /** Save `text` for the session's next prompt, replacing any unread report. Throws if it cannot. */
 export function writeHandoff(dir: string, sessionId: string, text: string): void {
-	mkdirSync(dir, { recursive: true });
-	writeFileAtomic(handoffPath(dir, sessionId), text);
+	writeSessionFile(dir, sessionId, "txt", text);
 }
 
 /** Take the session's report, once. Null when there is none or it cannot be claimed. */
 export function takeHandoff(dir: string, sessionId: string): string | null {
-	const target = handoffPath(dir, sessionId);
+	return claimSessionFile(dir, sessionId, "txt");
+}
+
+/** Take the session's `extension` file, once: its text, or null when there is none or it cannot be claimed. */
+export function claimSessionFile(dir: string, sessionId: string, extension: string): string | null {
+	const target = sessionFile(dir, sessionId, extension);
 	const claimed = `${target}.${process.pid}.claimed`;
 	try {
 		renameSync(target, claimed);

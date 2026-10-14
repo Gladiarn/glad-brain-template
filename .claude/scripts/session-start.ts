@@ -92,7 +92,7 @@ import { debug, envelopedLimit, fitWithMeter, type OutputLimit, readStdinJson, w
 import { readOmMod } from "./lib/om-mod.ts";
 import { resolveProjectDir } from "./lib/project-dir.ts";
 
-type HookInput = { readonly source?: unknown; readonly session_id?: unknown };
+type HookInput = { readonly source?: unknown; readonly session_id?: unknown; readonly om_reinject?: unknown };
 
 // The SessionStart payload carries `source` (startup/clear/resume/compact).
 // Missing or unparseable stdin fails open to full mode. stdin is OPTIONAL
@@ -119,11 +119,6 @@ async function readHookInput(): Promise<HookInput | null> {
 	return result;
 }
 const hookInput = await readHookInput();
-// A Gemini session marked for re-injection after a compression (#357) that is
-// resumed or cleared before its next prompt gets its context here instead.
-if ((hookInput?.source === "resume" || hookInput?.source === "clear") && typeof hookInput.session_id === "string") {
-	takeReinject(HANDOFF_DIR, hookInput.session_id);
-}
 
 function readManifestRaw(): string | null {
 	try {
@@ -160,7 +155,13 @@ if (envFile) {
 const omMod = readOmMod(hookInput);
 if (omMod === "standdown") process.exit(0);
 const delivering = omMod === "deliver";
-const mode = delivering ? "full" : injectionMode(hookInput?.source);
+// A Gemini session compressed since its context was injected (#357) gets it
+// here instead of on its next prompt, and in full whatever the source: the
+// compression summarised away the sections the compact form points at. Taking
+// the stored context consumes it, so after the stand-down, which injects nothing.
+const compressed =
+	typeof hookInput?.session_id === "string" && hookInput.session_id !== "" && takeReinject(HANDOFF_DIR, hookInput.session_id) !== null;
+const mode = delivering || compressed ? "full" : injectionMode(hookInput?.source);
 
 process.chdir(cwd);
 
@@ -183,7 +184,12 @@ const infraRootFilenames = parseInfraRootFilenames(manifestJson);
 // Route through `buildQmdCommand` so the shim-bypass logic that fixes
 // the MCP wrapper applies here too.
 const qmdIndex = resolveQmdIndex(manifestJson, cwd);
-const qmdEntry = resolveQmdEntry();
+// Gemini's PreCompress builds the context to re-inject (lib/session-start-run.ts,
+// #357): no qmd work in that run. The probes, self-heal and version check ran
+// at startup, a 20 s rebuild here would spend the run's whole budget, and
+// PreCompress started its own refresh.
+const reinjectBuild = hookInput?.om_reinject === true;
+const qmdEntry = reinjectBuild ? null : resolveQmdEntry();
 
 // qmd is OPTIONAL in this template: every self-heal path below is gated on
 // a resolvable install (`qmdEntry !== null`). A machine without qmd gets no
@@ -289,7 +295,7 @@ const qmdCwd = bootstrapNeeded ? cwd : tmpdir();
 // update too, the same as the write-time refresh worker (#337): a test's
 // session-start would otherwise leave a qmd update or bootstrap running
 // against its temp vault after the run.
-spawnDetachedQmd(qmdUpdate, "session-start", qmdCwd);
+if (!reinjectBuild) spawnDetachedQmd(qmdUpdate, "session-start", qmdCwd);
 
 type CmdResult =
 	| { readonly kind: "ok"; readonly stdout: string }

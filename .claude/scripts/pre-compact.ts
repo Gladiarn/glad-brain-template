@@ -22,7 +22,8 @@ import { debug, readStdinJson } from "./lib/hook-io.ts";
 import { isMainModule } from "./lib/main-guard.ts";
 import { sentinelPathFrom, triggerDebouncedRefresh } from "./lib/qmd-refresh.ts";
 import { resolveProjectDir } from "./lib/project-dir.ts";
-import { markReinject, schedulesReinject } from "./lib/reinject.ts";
+import { reinjectSession, storeReinject } from "./lib/reinject.ts";
+import { sessionStartContext } from "./lib/session-start-run.ts";
 import { HANDOFF_DIR } from "./lib/stop-handoff.ts";
 
 type HookInput = {
@@ -84,17 +85,31 @@ if (isMainModule(import.meta.url)) {
 		});
 	}
 
-	// Gemini fires no SessionStart after compressing, so mark the session for
-	// the next BeforeAgent to re-inject the context (lib/reinject.ts, #357).
-	// Before the backup, which can exit early.
-	if (schedulesReinject(input)) {
-		try {
-			markReinject(HANDOFF_DIR, input.session_id as string);
-		} catch (err) {
-			debug(`pre-compact: could not mark the re-injection: ${(err as Error).message}`);
-		}
+	// The backup first: it is this hook's own job, and the re-injection below
+	// can take most of Gemini's PreCompress budget. Best effort, so a backup
+	// that throws never costs the re-injection.
+	try {
+		backupTranscript(input);
+	} catch (err) {
+		debug(`pre-compact: backup failed: ${(err as Error).message}`);
 	}
 
+	// Gemini fires no SessionStart after compressing, so store the context for
+	// the next BeforeAgent to re-inject (lib/reinject.ts, #357).
+	const reinjectFor = reinjectSession(input);
+	if (reinjectFor !== null) {
+		const context = sessionStartContext();
+		try {
+			storeReinject(HANDOFF_DIR, reinjectFor, context);
+		} catch (err) {
+			debug(`pre-compact: could not store the re-injection: ${(err as Error).message}`);
+		}
+	}
+	process.exit(0);
+}
+
+/** Copy the transcript into thinking/session-logs and prune old copies. Best effort. */
+function backupTranscript(input: HookInput): void {
 	const transcriptPath =
 		typeof input.transcript_path === "string" ? input.transcript_path : "";
 	const trigger =
@@ -102,7 +117,7 @@ if (isMainModule(import.meta.url)) {
 
 	if (!transcriptPath) {
 		debug("pre-compact: no transcript_path in input");
-		process.exit(0);
+		return;
 	}
 
 	const projectDir = resolveProjectDir(process.cwd());
@@ -127,9 +142,8 @@ if (isMainModule(import.meta.url)) {
 		} else {
 			debug(`pre-compact: copy failed: ${(err as Error).message}`);
 		}
-		process.exit(0);
+		return;
 	}
 
 	pruneBackups(backupDir, BACKUP_RETAIN);
-	process.exit(0);
 }
