@@ -17,6 +17,7 @@ import { classify } from "./lib/matcher.ts";
 import { claimUnseen } from "./lib/hint-state.ts";
 import { envPath } from "./lib/env-path.ts";
 import { HANDOFF_DIR, takeHandoff } from "./lib/stop-handoff.ts";
+import { reinjectContext } from "./lib/reinject.ts";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 // CLASSIFY_HINT_STATE routes the state file into a tmp path for tests
@@ -68,6 +69,11 @@ if (toEmit.length > 0) {
 	);
 }
 if (stopReport !== null) parts.push(stopReport);
+// After a Gemini compression, the session context once (#357). Last: if the
+// output cap cuts anything, it cuts the end of the context, not the hints
+// claimUnseen has already marked as fired.
+const reinjected = typeof sessionId === "string" && sessionId ? reinjectContext(HANDOFF_DIR, sessionId) : null;
+if (reinjected !== null) parts.push(reinjected);
 
 if (parts.length > 0) {
 	const eventName =
