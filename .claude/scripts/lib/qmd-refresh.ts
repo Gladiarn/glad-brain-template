@@ -14,10 +14,10 @@
  * delegates platform-specific spawn shape to `lib/qmd.ts`.
  */
 
-import { spawn } from "node:child_process";
-import { rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
-import { buildQmdCommand, REFRESH_SWITCH, refreshDisabled, resolveQmdEntry } from "./qmd.ts";
+import { buildQmdCommand, REFRESH_SWITCH, refreshDisabled, resolveQmdEntry, spawnDetachedQmd } from "./qmd.ts";
 import { envPath } from "./env-path.ts";
 import { debug } from "./hook-io.ts";
 import { isInsideVault } from "./project-dir.ts";
@@ -40,9 +40,11 @@ const SKIP_SEGMENTS: readonly string[] = [
  * Where the debounce sentinel lives: QMD_REFRESH_SENTINEL when set (tests point
  * it at a temp file so parallel workers don't race on the shared one), else
  * beside the hook scripts. Empty counts as unset (lib/env-path.ts, #360).
+ * Absolute, against this hook's cwd: the worker it is handed to runs from
+ * another (#404).
  */
 export function sentinelPathFrom(env: Readonly<Record<string, string | undefined>>, scriptDir: string): string {
-	return envPath(env, "QMD_REFRESH_SENTINEL", join(scriptDir, ".qmd-refresh-sentinel"));
+	return resolvePath(envPath(env, "QMD_REFRESH_SENTINEL", join(scriptDir, ".qmd-refresh-sentinel")));
 }
 
 /**
@@ -304,36 +306,21 @@ function touchSentinel(sentinelPath: string): void {
 export { REFRESH_SWITCH, refreshDisabled } from "./qmd.ts";
 
 /**
- * Spawn the detached worker. `stdio: 'ignore'` + `.unref()` + `detached`
- * survive parent exit without leaving file descriptors open, and
- * `windowsHide: true` suppresses the transient console window that a
- * naked `spawn` creates on Windows. Errors are logged under HOOK_DEBUG
- * only — production is silent per the hook protocol.
+ * The detached worker's cwd: the OS temp folder, so a worker that lasts
+ * minutes never holds the vault open (lib/qmd-cwd.ts, #404), or the hook's
+ * own when there is none. The worker finds the vault from its own path.
  */
-function spawnDetachedWorker(
-	workerPath: string,
-	logPrefix: string,
-	workerArgs: readonly string[] = [],
-): void {
-	const child = spawn(
-		process.execPath,
-		[
-			"--disable-warning=ExperimentalWarning",
-			"--experimental-strip-types",
-			workerPath,
-			...workerArgs,
-		],
-		{
-			detached: true,
-			stdio: "ignore",
-			windowsHide: true,
-			cwd: process.cwd(),
-		},
-	);
-	child.on("error", (err) => {
-		debug(`${logPrefix}: worker spawn error: ${err.message}`);
-	});
-	child.unref();
+export function workerCwd(temp: string = tmpdir()): string {
+	return existsSync(temp) ? temp : process.cwd();
+}
+
+/**
+ * Spawn the detached worker through the one detached spawner
+ * (`spawnDetachedQmd`, lib/qmd.ts). Exported for its spawning test.
+ */
+export function spawnDetachedWorker(workerPath: string, logPrefix: string, workerArgs: readonly string[] = []): void {
+	const args = ["--disable-warning=ExperimentalWarning", "--experimental-strip-types", workerPath, ...workerArgs];
+	spawnDetachedQmd({ cmd: process.execPath, args, shell: false }, logPrefix, workerCwd());
 }
 
 /**
