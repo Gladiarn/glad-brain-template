@@ -7,9 +7,10 @@
  * merely that a flag came back false.
  */
 
-import { test, describe } from "node:test";
+import { test, describe, mock } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import fs, { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 
@@ -106,6 +107,39 @@ describe("markSuperseded", () => {
 			assert.match(r.reason, /refusing to modify/);
 			assert.equal(readFileSync(join(dir, rel), "utf8"), original);
 		} finally {
+			rmTemp(dir);
+		}
+	});
+
+	test("a memory that changes on every attempt reports ok: false, unwritten", () => {
+		// #328's exhaustion case: someone saves the note between each read and
+		// its re-check, so no attempt's edit is safe to land. Reporting success
+		// here is the lie the guarded rewrite exists to stop. The save is made
+		// inside readFileSync, synced into the ESM bindings the library imported.
+		const { dir, rel } = vaultWith(MD);
+		const full = join(dir, rel);
+		let saves = 0;
+		// Captured first: once synced, this file's own readFileSync is the mock too.
+		const realRead = fs.readFileSync;
+		const realWrite = fs.writeFileSync;
+		mock.method(fs, "readFileSync", (...args: Parameters<typeof readFileSync>) => {
+			if (args[0] === full) realWrite(full, `${realRead(full, "utf8")}saved ${++saves}
+`, "utf8");
+			return realRead(...args);
+		});
+		syncBuiltinESMExports();
+		try {
+			const r = markSuperseded(dir, rel, "The Correction");
+			assert.equal(r.ok, false);
+			assert.match(r.reason, /contended/);
+			mock.restoreAll();
+			syncBuiltinESMExports();
+			const after = readFileSync(full, "utf8");
+			assert.ok(!after.includes("The Correction"), "nothing of ours was written");
+			assert.ok(after.includes(`saved ${saves}`), "every save the other writer made survives");
+		} finally {
+			mock.restoreAll();
+			syncBuiltinESMExports();
 			rmTemp(dir);
 		}
 	});
