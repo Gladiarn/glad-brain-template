@@ -113,8 +113,6 @@ const WATCHED_ROOT_FILES: readonly string[] = [
 	".gitignore",
 	".mcp.json",
 	"vault-manifest.json",
-	"obsidian-mind-demo.gif",
-	"obsidian-mind-logo.png",
 ];
 
 export function listTopLevelFiles(dir: string, exts: readonly string[]): string[] {

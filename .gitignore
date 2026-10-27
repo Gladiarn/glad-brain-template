@@ -23,9 +23,6 @@
 # QMD index (local, regenerated)
 .qmd/
 
-# ShardMind runtime hook output (local, regenerated)
-.shardmind/logs/
-
 # Session logs (local transcripts)
 thinking/session-logs/
 
@@ -37,8 +34,8 @@ node_modules/
 # session, read through /memory), and the typings and tsconfig Claude Code
 # writes into a mod folder when it is loaded for development.
 .claude/session-context.md
-.claude/skills/obsidian-mind/.claude-plugin/types/
-.claude/skills/obsidian-mind/tsconfig.json
+.claude/skills/glad-brain/.claude-plugin/types/
+.claude/skills/glad-brain/tsconfig.json
 
 # Hook runtime state (local, self-pruning / debounce sentinel)
 .claude/scripts/.hint-state.json

@@ -1,6 +1,8 @@
 # Architecture
 
-This document describes how obsidian-mind fits together — the load-bearing seams, the design choices behind them, and where to extend the system. It is aimed at contributors and anyone forking the template who wants to customize it without breaking the mechanics.
+This document describes how Glad Brain fits together — the load-bearing seams, the design choices behind them, and where to extend the system. It is aimed at contributors and anyone forking the template who wants to customize it without breaking the mechanics.
+
+Glad Brain began as a fork of obsidian-mind (https://github.com/breferrari/obsidian-mind).
 
 It is not a folder tour. For the day-to-day layout, read `AGENTS.md`. For the user-facing story, read `README.md`.
 
@@ -8,7 +10,7 @@ It is not a folder tour. For the day-to-day layout, read `AGENTS.md`. For the us
 
 ## System Overview
 
-obsidian-mind is a plain Obsidian vault with four systems layered on top:
+Glad Brain is a plain Obsidian vault with four systems layered on top:
 
 1. **The vault itself** — Markdown files, frontmatter, wikilinks. Portable, git-tracked, Obsidian-browsable.
 2. **A hook pipeline** — small TypeScript scripts invoked by the agent harness at lifecycle events (session start, every message, after writes, before compaction, after each response; Gemini at session end).
@@ -214,7 +216,7 @@ A few specific design choices are worth calling out:
 
 ### The Claude Code mod
 
-Claude Code 2.1.287 added mods: plugins whose code runs inside Claude Code and can wrap the settings-hook events as `classic.<Event>` (PreToolUse rides `tool.call` instead). The template ships one, `obsidian-mind`, at `.claude/skills/obsidian-mind/`; Claude Code loads it in place once the vault folder is trusted, from the session's working folder only.
+Claude Code 2.1.287 added mods: plugins whose code runs inside Claude Code and can wrap the settings-hook events as `classic.<Event>` (PreToolUse rides `tool.call` instead). The template ships one, `glad-brain`, at `.claude/skills/glad-brain/`; Claude Code loads it in place once the vault folder is trusted, from the session's working folder only.
 
 - **The hooks stay the engine.** Codex and Gemini have no mods, and on Claude Code the mod does not load everywhere (an older CLI, an untrusted folder, a session started in a subfolder, managed-only policy). So the mod adds no behaviour of its own: it runs the same scripts and only changes the channel their output reaches the session through.
 - **The switch rides on the event.** What the mod passes to `next()` is what the settings hooks read on stdin (`lib/om-mod.ts`). For an event it handles, the mod does its own work first and then passes `om_mod: "standdown"`, and the script exits. The flag exists only on events the mod's hook actually ran on: a mod that throws, crashed or never loaded sends the original event, and the hook runs as without it. An environment variable would outlive a dead mod and leave the hooks silent; answering the event without `next` would silence the user's own hooks too.
@@ -1036,26 +1038,26 @@ The design is hostile to these changes (on purpose):
 
 ## Upgrade Path
 
-Template versions are tracked in `vault-manifest.json` with fingerprints that let `/om-vault-upgrade` detect an older vault's version by presence or absence of specific files. The migrator uses the infrastructure/user-content split to decide what to overwrite versus preserve. `CHANGELOG.md` documents what changed in each version.
+`/om-vault-upgrade` has two jobs. With no argument it upgrades this vault: `upgrade-plan.ts` fetches the `template` remote and reports what `git pull template main` would take, merge, or stop on, and the pull does the work. With a source vault it imports that vault's content: template versions are tracked in `vault-manifest.json` with fingerprints that detect an earlier template layout by presence or absence of specific files, and the migrator uses the infrastructure/user-content split to decide what to overwrite versus preserve. `CHANGELOG.md` documents what changed in each version.
 
 The long-term stability guarantee is narrow: the manifest keys (`qmd_index`, `infrastructure`, `user_content_roots`, `frontmatter_required`, `memory_root`), the hook script names under `.claude/scripts/`, the `om-mcp.mjs` launcher path that consuming repos put in their `.mcp.json`, and the folder layout for user content. Everything else — including command names, subagent internals, and classification logic — is allowed to evolve between versions.
 
 `memories/` is listed in `user_content_roots`, so an upgrade preserves it rather than treating it as template infrastructure. The launcher path is on this list because it is the one string that lives *outside* the vault, written into other repositories' config — moving it silently breaks every consumer.
 
-## Install Paths
+## Install Path
 
-Two ways to bring obsidian-mind into a new directory:
+There is one way to bring Glad Brain into a new directory: `git clone`, then `setup.sh`.
 
-**`git clone` — the original.** Clone the repo, open the folder in Obsidian, talk to the agent. Zero machinery beyond git. Every file ships verbatim; no install-time substitution. The hook scripts under `.claude/scripts/` only run when the agent triggers them. This path is the long-standing default and the one new contributors use to read the codebase.
+```bash
+git clone https://github.com/Gladiarn/glad-brain-template.git ~/brain
+cd ~/brain
+git remote rename origin template
+rm .template-repo
+./setup.sh
+```
 
-**`shardmind install` — v6.** [ShardMind](https://github.com/breferrari/shardmind) is a package manager for Obsidian vault templates that produces the same vault as `git clone` plus a `.shardmind/` sidecar. A wizard collects four values (`user_name`, `org_name`, `vault_purpose`, `qmd_enabled`), gates eleven modules (4 always-on content, 4 removable content, 3 agent — `claude` / `codex` / `gemini`), and runs the lifecycle hooks: `bootstrap` (`.shardmind/hooks/bootstrap.ts`) initializes git and optionally bootstraps QMD when enabled, and `personalize` (`.shardmind/hooks/personalize.ts`) writes the user's name into `brain/North Star.md`. The shard contract is locked by three invariants:
+**`git clone`.** Every file ships verbatim, with no install-time substitution. The hook scripts under `.claude/scripts/` only run when an agent or the `brain` CLI triggers them. The `template` remote is how the vault pulls later template changes (`git pull template main`, which `/om-vault-upgrade` plans first). Deleting `.template-repo` turns off the template guard, which only applies to the public repo.
 
-1. **Invariant 1 — clone-equivalence under defaults.** `shardmind install --defaults` produces a vault byte-equivalent to `git clone` modulo Tier 1 exclusions (`.git`, `.github`, ephemeral `.obsidian/workspace*.json`), the engine metadata under `.shardmind/`, and a vault-root `shard-values.yaml`.
-2. **Invariant 2 — hooks no-op on defaults.** Managed-file edits (e.g., the North Star personalization) live in the `personalize` hook, which the engine refuses to call when every value is at its default — so the invariant is engine-enforced, not hook-checked. With every value at its default, the install remains byte-equivalent to clone.
-3. **Invariant 3 — post-update is additive-only.** The post-update hook restricts managed-file writes to `ctx.newFiles` (paths added by the new version), preventing clobbers of the merge engine's three-way resolution of user edits.
+**`setup.sh`.** It is safe to run again. It checks for WSL2, asks once for the Gemini key and stores it in `~/.config/second-brain/.env` (mode 600, outside the repo), installs graphify and QMD, registers the global Claude Code hooks (through `bin/brain-hook`) and the `om` MCP server, and installs the secret guard as a pre-commit hook. Its options are `--non-interactive`, `--no-qmd` and `--no-install`.
 
-The contract surface lives at `.shardmind/shard.yaml` (manifest), `.shardmind/shard-schema.yaml` (values + module declarations), `.shardmind/hooks/{bootstrap,personalize,post-update}.ts` (lifecycle), and `.shardmindignore` at repo root (excludes `CONTRIBUTING.md`, README translations, marketing media from the install). Spec: [ShardMind `docs/SHARD-LAYOUT.md`](https://github.com/breferrari/shardmind/blob/main/docs/SHARD-LAYOUT.md).
-
-**Additive principle.** `shardmind install` produces a strictly larger vault than `git clone` — never smaller, never different on shared paths under defaults. Deleting `.shardmind/` and `shard-values.yaml` from an installed vault leaves a working clone-equivalent vault. The same is true on the source side: deleting `.shardmind/` from this repo would produce a v5.1-shape working vault. ShardMind extends the clone experience; it doesn't replace it.
-
-`shardmind update` (v6+) three-way-merges your edits with upstream changes — the moat that `git pull` doesn't provide for templates with installed-time personalization. `/om-vault-upgrade` remains the path for migrating a v5.x clone or arbitrary vault into v6 in place; once installed, `shardmind update` (or `shardmind adopt` for retroactive adoption) takes over.
+Nothing about the vault depends on how it was installed: the folder is an ordinary git repository and an ordinary Obsidian vault.

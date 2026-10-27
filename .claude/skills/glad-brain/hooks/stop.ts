@@ -38,10 +38,10 @@ export function parseStopReport(stdout: string): StopReport {
 /**
  * The line drawn under the answer when the report changed: what drifted, in
  * the report's own words, and where the rest went. Claude Code shows it after
- * the names of the plugins that answered on Stop, joined with `+` (observed on
- * 2.1.288: `obsidian-mind: …`; reported on 2.1.296 as
- * `obsidian-mind+cc-plugin-agents-md: …` when a built-in plugin also answered —
- * TBC, not re-checked). Match any such label with `^obsidian-mind(\+[^:]+)?: `.
+ * the names of the plugins that answered on Stop, joined with `+`: `glad-brain: …`,
+ * or `glad-brain+<other plugin>: …` when a built-in plugin also answered
+ * (observed once as `+cc-plugin-agents-md` on Claude Code 2.1.296, TBC, not
+ * re-checked). Match any such label with `^glad-brain(\+[^:]+)?: `.
  */
 export function summaryLine(report: StopReport): string {
 	const what = report.claims.length > 0 ? report.claims.join(" · ") : "wrap-up checklist";
@@ -76,7 +76,7 @@ export function ranIn(turnText: string, promptText: string): boolean {
 }
 
 export function carriesReport(origin: PromptOrigin | undefined): boolean {
-	return fromPerson(origin) || (origin?.kind === "plugin" && origin.name === "obsidian-mind");
+	return fromPerson(origin) || (origin?.kind === "plugin" && origin.name === "glad-brain");
 }
 
 /** Whether the person sent this prompt: typed, over Remote Control, through the SDK, or as the session's owner pinging it from Slack. */

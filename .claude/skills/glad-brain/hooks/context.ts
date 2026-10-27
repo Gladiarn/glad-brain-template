@@ -1,7 +1,7 @@
 import type { PromptContextResult } from "claude-code";
 
 /** The name the context renders under when no instruction file can carry it. */
-export const CONTEXT_BLOCK = "obsidian-mind";
+export const CONTEXT_BLOCK = "glad-brain";
 
 /**
  * The first message's context with the session context added: as a project

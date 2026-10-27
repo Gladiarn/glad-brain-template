@@ -2,7 +2,7 @@ import { describe, expect, test } from "claude-code/testing";
 import { CONTEXT_BLOCK, withSessionContext } from "./context.ts";
 import { engine, ROOT, type On, type Reply } from "./world.ts";
 
-// Run with `claude plugin test .claude/skills/obsidian-mind`. Each test's own
+// Run with `claude plugin test .claude/skills/glad-brain`. Each test's own
 // `on` hooks sit beneath the mod and stand in for the engine and the vault.
 
 const CONTEXT = "## Session Context\n\n### Date\n2026-10-03 (Saturday)\n\n_context injected: 0.1kB / 20.0kB budget_\n";
@@ -16,7 +16,7 @@ function vault(on: On, script: Reply | (() => Reply), options: { hangFirstWrite?
 	const context: unknown[] = [];
 	on("state.set", (_$, e, next) => {
 		const write = e as { plugin?: string; key?: string; value?: unknown };
-		if (write.plugin === "obsidian-mind" && write.key === "context") context.push(write.value);
+		if (write.plugin === "glad-brain" && write.key === "context") context.push(write.value);
 		return next(e);
 	});
 	const world = engine(on, typeof script === "function" ? script : () => script, options);

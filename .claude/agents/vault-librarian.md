@@ -10,7 +10,7 @@ skills:
   - qmd
 ---
 
-You are the vault librarian for an obsidian-mind vault. Run a full health check and produce a maintenance report.
+You are the vault librarian for a Glad Brain vault. Run a full health check and produce a maintenance report.
 
 ## Checks to Run
 

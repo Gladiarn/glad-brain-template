@@ -8,7 +8,6 @@
     ".scripts/",
     ".claude-plugin/",
     ".codex/",
-    ".gemini/",
-    ".shardmind/"
+    ".gemini/"
   ]
 }

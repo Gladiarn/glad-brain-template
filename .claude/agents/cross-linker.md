@@ -9,7 +9,7 @@ skills:
   - qmd
 ---
 
-You are the cross-linker for an obsidian-mind vault. Your job is to find missing wikilinks and strengthen the graph.
+You are the cross-linker for a Glad Brain vault. Your job is to find missing wikilinks and strengthen the graph.
 
 ## Input
 

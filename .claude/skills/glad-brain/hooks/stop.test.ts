@@ -2,7 +2,7 @@ import { describe, expect, test } from "claude-code/testing";
 import { engine, type On, type Reply } from "./world.ts";
 import { carriesReport, fromPerson, parseStopReport, ranIn, summaryLine, withLine, type StopReport } from "./stop.ts";
 
-// Run with `claude plugin test .claude/skills/obsidian-mind`. Each test's own
+// Run with `claude plugin test .claude/skills/glad-brain`. Each test's own
 // `on` hooks sit beneath the mod and stand in for the engine and the vault.
 // What the kit cannot establish is the order a live session raises them in
 // (classic.Stop before turn.complete); that is checked in a live session.
@@ -477,7 +477,7 @@ describe("an urgent finding (#266)", () => {
 
 		expect(world.submitted.length).toBe(1);
 		expect(world.submitted[0]?.text).toBe("push blocked");
-		expect(world.submitted[0]?.origin).toEqual(expect.objectContaining({ kind: "plugin", name: "obsidian-mind" }));
+		expect(world.submitted[0]?.origin).toEqual(expect.objectContaining({ kind: "plugin", name: "glad-brain" }));
 		expect(world.submitted[0]?.context).toEqual([WITH_URGENT("k", "push blocked")]);
 		await $.prompt.submit({ text: "typed" });
 		expect(world.submitted[1]?.context ?? []).toEqual([]);
@@ -653,12 +653,12 @@ describe("carriesReport", () => {
 	test("only the person's own prompts count as the person speaking, never a plugin's", () => {
 		for (const kind of ["composer", "bridge", "sdk", "slack-ping"] as const) expect(fromPerson({ kind } as never)).toBe(true);
 		expect(fromPerson(undefined)).toBe(true);
-		expect(fromPerson({ kind: "plugin", name: "obsidian-mind" } as never)).toBe(false);
+		expect(fromPerson({ kind: "plugin", name: "glad-brain" } as never)).toBe(false);
 		expect(fromPerson({ kind: "peer" } as never)).toBe(false);
 	});
 
 	test("this mod's own prompt carries it; another plugin's does not", () => {
-		expect(carriesReport({ kind: "plugin", name: "obsidian-mind" } as never)).toBe(true);
+		expect(carriesReport({ kind: "plugin", name: "glad-brain" } as never)).toBe(true);
 		expect(carriesReport({ kind: "plugin", name: "someone-else" } as never)).toBe(false);
 	});
 

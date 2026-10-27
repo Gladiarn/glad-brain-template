@@ -100,57 +100,6 @@ describe("AGENTS.md is the one instruction file (#321)", () => {
 		}
 	});
 
-	test("every file AGENTS.md points at is claimed by no removable module, so every module selection installs it", () => {
-		// A file claimed by a removable module disappears when that module is
-		// deselected, and a Codex-only vault would then follow a pointer to
-		// nothing. Shared files must be core: claimed by no removable module.
-		const schema = readFileSync(resolve(repoRoot, ".shardmind/shard-schema.yaml"), "utf-8");
-		const modulesBlock = schema.slice(schema.indexOf("\nmodules:\n"), schema.indexOf("\nsignals:\n"));
-		const modules = modulesBlock.split(/\n  (?=[a-z_]+:\n)/).slice(1);
-		// A module's `paths`, written either as a flow list (`paths: ["a/"]`)
-		// or as a block list of `- "a/"` lines; the schema uses both.
-		const pathsOf = (m: string): string[] => {
-			const flow = /\n    paths: \[([^\]]*)\]/.exec(m);
-			if (flow) return [...flow[1]!.matchAll(/"([^"]+)"/g)].map((x) => x[1]!);
-			const at = m.indexOf("\n    paths:\n");
-			if (at < 0) return [];
-			const items: string[] = [];
-			// Every line until the next key at module level or above; blank
-			// lines, comments, a trailing comment or an unquoted item (spaces
-			// and all) must not end the list early or cut an item short.
-			for (const line of m.slice(at + "\n    paths:\n".length).split("\n")) {
-				if (/^ {0,4}[^\s#]/.test(line)) break;
-				const item = /^\s+-\s+(?:"([^"]*)"|'([^']*)'|(.*?))\s*(?:#.*)?$/.exec(line);
-				if (item) items.push(item[1] ?? item[2] ?? item[3]!);
-			}
-			return items;
-		};
-		assert.ok(pathsOf(modules.find((m) => m.startsWith("brain:"))!).includes("brain/"), "pathsOf misreads a flow-style list");
-		const claudeList = pathsOf(modules.find((m) => m.startsWith("claude:"))!);
-		assert.ok(claudeList.includes(".claude/agents/") && claudeList.includes(".claude-plugin/"), "pathsOf misreads a block list");
-		const removablePaths = modules.filter((m) => /\n    removable: true\b/.test(m)).flatMap(pathsOf);
-		assert.ok(modules.length > 0, "found no modules in shard-schema.yaml");
-		const claims = (path: string, claim: string) => (claim.endsWith("/") ? path.startsWith(claim) : path === claim);
-		for (const t of [...pointerTargets(), "AGENTS.md"]) {
-			const by = removablePaths.find((c) => claims(t, c));
-			assert.equal(by, undefined, `${t} is claimed by a removable module (${by}), so a vault without that module loses it`);
-		}
-		// And the Claude module, removable or not, claims only the Claude-only files.
-		const claude = modules.find((m) => m.startsWith("claude:"))!;
-		const claudePaths = pathsOf(claude);
-		assert.ok(!claudePaths.includes(".claude/rules/"), "the Claude module claims all of .claude/rules/, shared files included");
-		const dir = resolve(repoRoot, ".claude/rules");
-		const claudeOnly = readdirSync(dir)
-			.filter((f) => f.endsWith(".md") && !withoutFrontmatter(readFileSync(resolve(dir, f), "utf-8")).startsWith(SHARED_LINE))
-			.map((f) => `.claude/rules/${f}`)
-			.sort();
-		assert.deepEqual(
-			claudePaths.filter((p) => p.startsWith(".claude/rules/")).sort(),
-			claudeOnly,
-			"the Claude module must claim exactly the Claude-only rules files",
-		);
-	});
-
 	test("every .claude/rules/*.md exists and is non-empty", () => {
 		const dir = resolve(repoRoot, ".claude/rules");
 		assert.ok(existsSync(dir), ".claude/rules/ is missing: the Claude-only guidance has nowhere to load from");

@@ -1,4 +1,4 @@
-# Obsidian Mind
+# Glad Brain
 
 Personal Obsidian vault -- a second brain for a web developer and designer: per-project plans, client notes, decisions, portfolio wins, and agent context.
 

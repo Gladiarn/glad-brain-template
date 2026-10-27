@@ -1,8 +1,6 @@
 # Glad Brain
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-![Node 22+](https://img.shields.io/badge/node-22%2B-339933)
-![Platform: WSL2](https://img.shields.io/badge/platform-WSL2-555555)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) ![Node 22+](https://img.shields.io/badge/node-22%2B-339933) ![Platform: WSL2](https://img.shields.io/badge/platform-WSL2-555555)
 
 Persistent memory for Claude Code that works across many projects and stays in sync on every PC you use.
 
@@ -187,7 +185,7 @@ Each save is logged to `.brain/save-log.jsonl` with the model used, token counts
 
 The hooks are dependency-free TypeScript in `.claude/scripts/`. `setup.sh` backs up `~/.claude/settings.json` before adding them, and they do nothing outside the vault and linked repos.
 
-The Claude Code plugin in `.claude/skills/obsidian-mind/` runs unsandboxed. Review it before trusting the folder. `claude plugin validate .claude/skills/obsidian-mind` lists everything it hooks and calls. To disable it, add `"enabledPlugins": { "obsidian-mind@skills-dir": false }` to `.claude/settings.local.json`.
+The Claude Code plugin in `.claude/skills/glad-brain/` runs unsandboxed. Review it before trusting the folder. `claude plugin validate .claude/skills/glad-brain` lists everything it hooks and calls. To disable it, add `"enabledPlugins": { "glad-brain@skills-dir": false }` to `.claude/settings.local.json`.
 
 <!-- mod-validate:start -->
 The two lines that matter in its output, for this version of the mod:

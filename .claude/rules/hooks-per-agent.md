@@ -2,7 +2,7 @@
 paths:
   - ".claude/settings.json"
   - ".claude/scripts/**"
-  - ".claude/skills/obsidian-mind/**"
+  - ".claude/skills/glad-brain/**"
   - ".codex/**"
   - ".gemini/**"
 ---

@@ -20,9 +20,9 @@
 ## Checklist
 
 - [ ] PR title follows `type: description` format
-- [ ] Links an issue assigned to me, or is a trivial typo fix in documentation
+- [ ] No personal notes, plans or client names in the diff (the template guard fails the PR otherwise)
 - [ ] A code change comes with a test that fails on `main` and passes with it
 - [ ] Tests pass (`cd .claude/scripts && npm test`)
 - [ ] Any NEW guard, check, or config constraint has demonstrated a red — broken deliberately, seen to fire, reverted. Say which, in one line
-- [ ] Doc tables updated if adding commands/agents (AGENTS.md, README, Skills.md, translations)
-- [ ] No changes to CHANGELOG.md or vault-manifest.json version (automated by release pipeline)
+- [ ] Doc tables updated if adding commands/agents (AGENTS.md, README, Skills.md)
+- [ ] No changes to CHANGELOG.md or the version in vault-manifest.json (set at release)

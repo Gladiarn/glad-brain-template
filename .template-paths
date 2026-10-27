@@ -9,7 +9,6 @@
 .gemini/**
 .github/**
 .scripts/**
-.shardmind/**
 .obsidian/*.json
 bases/**
 bin/**
@@ -21,7 +20,6 @@ templates/**
 .gitignore
 .graphifyignore
 .mcp.json
-.shardmindignore
 .template-paths
 .template-repo
 AGENTS.md
@@ -33,8 +31,6 @@ LICENSE
 NOTICE.md
 README*.md
 brain.config.json
-obsidian-mind-demo.gif
-obsidian-mind-logo.png
 projects.map.json
 setup.sh
 vault-manifest.json

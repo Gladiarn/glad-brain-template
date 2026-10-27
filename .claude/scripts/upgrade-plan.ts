@@ -1,220 +1,112 @@
 #!/usr/bin/env node
 /**
- * upgrade-plan — the ShardMind-aware preflight for `/om-vault-upgrade` (#101).
+ * upgrade-plan: the preflight for `/om-vault-upgrade` when it upgrades this
+ * vault.
  *
- *   node --experimental-strip-types .claude/scripts/upgrade-plan.ts [--json] [--apply-behind] [--source <ref>]
+ *   node --experimental-strip-types .claude/scripts/upgrade-plan.ts [--json] [--remote <name>] [--branch <name>]
  *
- * Reads the vault, never changes it (except with --apply-behind, below):
- * - managed (`.shardmind/state.json`): `shardmind --json` and
- *   `shardmind update --dry-run --json`, classified by `classifyUpdate`;
- * - cloned without ShardMind (a `vault-manifest.json`, no state): the
- *   release it was cloned from is the manifest's `version`; runs
- *   `shardmind adopt <source> --from-version <v> --dry-run --yes --json`,
- *   fetches that release to hash each file's base, and classifies with
- *   `classifyAdopt`.
- * In both modes, a CLAUDE.md or GEMINI.md still in the vault is reported as a
- * move (#321): Claude Code reads a CLAUDE.md in place of AGENTS.md, and
- * Gemini no longer reads GEMINI.md. In an unmanaged clone, one whose
- * bytes are the release it was cloned from is behind instead, and
- * --apply-behind deletes it.
- * Prints the report (or, with --json, `{ mode, from, to, report,
- * settleFirst }`).
- *
- * --apply-behind (unmanaged clone only): writes the latest release's bytes
- * for every BEHIND file — one the user never changed — after checking each
- * against adopt's `shardHash`, so a following
- * `shardmind adopt … --mode keep-all-mine` keeps exactly the files that are
- * really the user's. Without it, keep-all-mine would record the stale files
- * as user-modified, and no later update would ever touch them.
- *
- * Requires ShardMind 0.2.1 or later: `--json` arrived in 0.2.0, and 0.2.0 has
- * an adopt that deletes a clone's own `.shardmind/` files when it fails or is
- * cancelled (shardmind#326).
+ * A private brain keeps the public template as its `template` remote, and
+ * upgrades with `git pull template main`. This fetches that remote and reports
+ * what the pull would do, file by file (see lib/upgrade-plan.ts). It never
+ * changes the vault: it fetches, reads, and asks git to merge in memory
+ * (`git merge-tree`, git 2.38 or later) to find the files a pull would stop
+ * on. With --json it prints `{ from, to, report }`.
  */
 
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { isMainModule } from "./lib/main-guard.ts";
 import { resolveProjectDir } from "./lib/project-dir.ts";
 import {
-	classifyAdopt,
-	classifyUpdate,
+	classifyTemplateChanges,
 	formatUpgradeReport,
-	retiredFileReady,
-	settleFirst,
-	untouchedRetiredFiles,
+	parseMergeTreeConflicts,
+	parseNameStatus,
 	withRetiredInstructionFiles,
-	type AdoptPlan,
-	type ShardmindEnvelope,
-	type StatusResult,
-	type UpdatePlan,
-	type UpgradeReport,
 } from "./lib/upgrade-plan.ts";
 
-const DEFAULT_SOURCE = "github:breferrari/obsidian-mind";
+const TEMPLATE_URL = "https://github.com/Gladiarn/glad-brain-template.git";
 
 function fail(message: string): never {
 	process.stderr.write(`upgrade-plan: ${message}\n`);
 	process.exit(1);
 }
 
-/**
- * ShardMind's real entry point, run with this Node, so no shell or `.cmd`
- * shim is involved (the same reason qmd is launched this way, #54). Falls
- * back to `shardmind` on PATH through the shell.
- */
-function shardmindCommand(args: readonly string[]): { cmd: string; args: string[]; shell: boolean } {
-	const root = spawnSync("npm root -g", { shell: true, encoding: "utf8", timeout: 10_000, windowsHide: true }).stdout?.trim() ?? "";
-	const entry = root ? join(root, "shardmind", "dist", "cli.js") : "";
-	if (entry && existsSync(entry)) return { cmd: process.execPath, args: [entry, ...args], shell: false };
-	// No argument here comes from outside this script except the source ref,
-	// which main() checks against a strict pattern.
-	return { cmd: ["shardmind", ...args].join(" "), args: [], shell: true };
+type GitResult = { readonly status: number | null; readonly stdout: string; readonly stderr: string };
+
+function git(cwd: string, args: readonly string[]): GitResult {
+	const r = spawnSync("git", args as string[], { cwd, encoding: "utf8", timeout: 120_000, windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+	return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
 
-/** Run ShardMind and parse its `--json` envelope. */
-function shardmind<T>(vault: string, args: readonly string[]): ShardmindEnvelope<T> {
-	const c = shardmindCommand([...args, "--no-update-check"]);
-	const r = spawnSync(c.cmd, c.args, {
-		cwd: vault,
-		shell: c.shell,
-		encoding: "utf8",
-		timeout: 300_000,
-		input: "",
-		env: { ...process.env, CI: "true" },
-		windowsHide: true,
-	});
+function gitOk(cwd: string, args: readonly string[]): string {
+	const r = git(cwd, args);
+	if (r.status !== 0) fail(`git ${args[0]} failed: ${r.stderr.trim().slice(0, 300)}`);
+	return r.stdout;
+}
+
+function manifestVersion(json: string): string {
 	try {
-		return JSON.parse(r.stdout) as ShardmindEnvelope<T>;
+		const v = (JSON.parse(json) as { version?: unknown }).version;
+		return typeof v === "string" ? v : "?";
 	} catch {
-		fail(`shardmind ${args[0] ?? ""} gave no JSON (exit ${r.status}): ${(r.stderr || r.stdout).slice(0, 400)}`);
+		return "?";
 	}
-}
-
-function versionAtLeast(v: string, min: readonly number[]): boolean {
-	const parts = v.trim().replace(/^v/, "").split(/[.-]/).map((n) => Number.parseInt(n, 10));
-	for (let i = 0; i < min.length; i++) {
-		const a = parts[i] ?? 0;
-		if (a !== min[i]) return a > (min[i] as number);
-	}
-	return true;
-}
-
-const sha256 = (b: Buffer): string => createHash("sha256").update(b).digest("hex");
-
-/** A shallow clone of `source` at tag `v<version>`, in a temp folder. */
-function cloneRelease(source: string, version: string): string {
-	const repo = source.replace(/^github:/, "").replace(/[#@].*$/, "");
-	const dir = mkdtempSync(join(tmpdir(), "om-upgrade-base-"));
-	const r = spawnSync("git", ["clone", "-q", "--depth", "1", "--branch", `v${version}`, `https://github.com/${repo}`, dir], {
-		encoding: "utf8",
-		timeout: 120_000,
-		windowsHide: true,
-	});
-	if (r.status !== 0) fail(`could not fetch ${repo} v${version}: ${r.stderr.slice(0, 300)}`);
-	return dir;
-}
-
-/** The newest stable `vX.Y.Z` tag of `source`. */
-function latestRelease(source: string): string {
-	const repo = source.replace(/^github:/, "").replace(/[#@].*$/, "");
-	const r = spawnSync("git", ["ls-remote", "--tags", `https://github.com/${repo}`], { encoding: "utf8", timeout: 60_000, windowsHide: true });
-	const tags = [...r.stdout.matchAll(/refs\/tags\/v(\d+)\.(\d+)\.(\d+)$/gm)].map((m) => [Number(m[1]), Number(m[2]), Number(m[3])] as const);
-	if (tags.length === 0) fail(`no release tags found for ${repo}`);
-	tags.sort((a, b) => b[0] - a[0] || b[1] - a[1] || b[2] - a[2]);
-	return (tags[0] as readonly number[]).join(".");
 }
 
 function main(): void {
 	const args = process.argv.slice(2);
 	const asJson = args.includes("--json");
-	const applyBehind = args.includes("--apply-behind");
-	const sourceIdx = args.indexOf("--source");
-	const source = sourceIdx >= 0 ? (args[sourceIdx + 1] ?? "") : DEFAULT_SOURCE;
-	if (!/^(github:)?[\w.-]+\/[\w.-]+$/.test(source)) fail(`not a shard reference: ${source}`);
+	const opt = (name: string, fallback: string): string => {
+		const i = args.indexOf(name);
+		return i >= 0 ? (args[i + 1] ?? "") : fallback;
+	};
+	const remote = opt("--remote", "template");
+	const branch = opt("--branch", "main");
+	// Both go to git as arguments, never through a shell; the pattern keeps an option-looking value out.
+	if (!/^[\w][\w./-]*$/.test(remote) || !/^[\w][\w./-]*$/.test(branch)) fail(`not a valid remote or branch name: ${remote} ${branch}`);
 
 	const vault = resolveProjectDir(process.cwd());
-	const v = shardmindCommand(["--version"]);
-	const ver = spawnSync(v.cmd, v.args, { shell: v.shell, encoding: "utf8", timeout: 60_000, windowsHide: true });
-	if (ver.status !== 0) fail("ShardMind is not installed. Install it (npm i -g shardmind) or use the manual migration in /om-vault-upgrade.");
-	if (!versionAtLeast(ver.stdout, [0, 2, 1])) fail(`ShardMind ${ver.stdout.trim()} is too old; 0.2.1 or later is needed (--json, and an adopt that keeps a clone's .shardmind/ files if it fails). Run: npm i -g shardmind@latest`);
-
-	let mode: "managed" | "unmanaged";
-	let from = "?";
-	let to = "?";
-	let report: UpgradeReport;
-
-	if (existsSync(join(vault, ".shardmind", "state.json"))) {
-		mode = "managed";
-		const status = shardmind<StatusResult>(vault, ["--json"]);
-		if (!status.ok) fail(`status: ${status.error.message}${status.error.hint ? ` — ${status.error.hint}` : ""}`);
-		from = status.result.version ?? "?";
-		to = status.result.update?.latest ?? from;
-		const plan = shardmind<UpdatePlan>(vault, ["update", "--dry-run", "--json"]);
-		if (!plan.ok) fail(`update plan: ${plan.error.message}${plan.error.hint ? ` — ${plan.error.hint}` : ""}`);
-		report = classifyUpdate(plan.result, status.result);
-	} else {
-		mode = "unmanaged";
-		let manifest: { version?: unknown } = {};
-		try {
-			manifest = JSON.parse(readFileSync(join(vault, "vault-manifest.json"), "utf8")) as { version?: unknown };
-		} catch {
-			fail("no .shardmind/state.json and no vault-manifest.json: not an obsidian-mind vault. Use the manual migration in /om-vault-upgrade.");
-		}
-		if (typeof manifest.version !== "string") fail("vault-manifest.json has no version, so the release this vault came from is unknown.");
-		from = manifest.version;
-		to = latestRelease(source);
-		const plan = shardmind<AdoptPlan>(vault, ["adopt", source, "--from-version", from, "--dry-run", "--yes", "--json"]);
-		if (!plan.ok) fail(`adopt plan: ${plan.error.message}${plan.error.hint ? ` — ${plan.error.hint}` : ""}`);
-		const base = cloneRelease(source, from);
-		// Retired instruction files the user never edited: the latest release
-		// has none, so applying "behind" for them means deleting them.
-		let untouched: string[] = [];
-		try {
-			const hashIn = (dir: string) => (p: string) => {
-				const f = join(dir, p);
-				return existsSync(f) ? sha256(readFileSync(f)) : null;
-			};
-			report = classifyAdopt(plan.result, hashIn(base));
-			untouched = untouchedRetiredFiles(hashIn(vault), hashIn(base), retiredFileReady(plan.result, report));
-		} finally {
-			rmSync(base, { recursive: true, force: true });
-		}
-		const toWrite = report.behind;
-		report = { ...report, behind: [...toWrite, ...untouched] };
-
-		if (applyBehind && report.behind.length > 0) {
-			if (toWrite.length > 0) {
-				const latest = cloneRelease(source, to);
-				try {
-					const want = new Map(plan.result.files.map((f) => [f.path, f.shardHash]));
-					for (const p of toWrite) {
-						const bytes = readFileSync(join(latest, p));
-						if (sha256(bytes) !== want.get(p)) fail(`${p} at v${to} does not match adopt's plan; nothing more was written`);
-						writeFileSync(join(vault, p), bytes);
-					}
-				} finally {
-					rmSync(latest, { recursive: true, force: true });
-				}
-			}
-			// Only after every write succeeded: the new AGENTS.md is in place.
-			for (const p of untouched) rmSync(join(vault, p));
-			process.stderr.write(
-				`upgrade-plan: wrote v${to} of ${toWrite.length} behind file(s), removed ${untouched.length} retired instruction file(s) you never edited\n`,
-			);
-		}
+	if (git(vault, ["rev-parse", "--git-dir"]).status !== 0) fail("this vault is not a git repository, so there is nothing to pull. Use the import mode of /om-vault-upgrade.");
+	if (git(vault, ["remote", "get-url", remote]).status !== 0) {
+		fail(`no \`${remote}\` remote. Add the template with: git remote add ${remote} ${TEMPLATE_URL}`);
 	}
 
+	if (gitOk(vault, ["status", "--porcelain"]).trim() !== "") {
+		process.stderr.write("upgrade-plan: this vault has uncommitted changes. Commit or stash them before `git pull`, or the pull may refuse to run.\n");
+	}
+
+	gitOk(vault, ["fetch", "--quiet", "--no-tags", remote, branch]);
+	const ref = `${remote}/${branch}`;
+	const base = git(vault, ["merge-base", "HEAD", ref]);
+	if (base.status !== 0 || base.stdout.trim() === "") {
+		fail(
+			`this vault and ${ref} have no common history, so \`git pull ${remote} ${branch}\` cannot merge them (a vault made with GitHub's "Use this template" button starts this way). Use the import mode of /om-vault-upgrade with a fresh clone of the template as the source.`,
+		);
+	}
+	const ancestor = base.stdout.trim();
+
+	const upstream = parseNameStatus(gitOk(vault, ["diff", "--name-status", "--no-renames", "--diff-filter=AMD", "-z", ancestor, ref]));
+	const local = new Set(gitOk(vault, ["diff", "--name-only", "--no-renames", "-z", ancestor, "HEAD"]).split("\0").filter((p) => p !== ""));
+	const templateFiles = gitOk(vault, ["ls-tree", "-r", "--name-only", "-z", ref]).split("\0").filter((p) => p !== "");
+
+	// A merge in memory: exit 1 means conflicts, with the conflicted paths listed.
+	const merge = git(vault, ["merge-tree", "--write-tree", "--name-only", "HEAD", ref]);
+	let conflicts = new Set<string>();
+	if (merge.status === 1) conflicts = new Set(parseMergeTreeConflicts(merge.stdout));
+	else if (merge.status !== 0) {
+		// git older than 2.38 has no --write-tree: treat every file both sides changed as a possible conflict.
+		process.stderr.write("upgrade-plan: this git cannot test the merge (2.38 or later is needed), so every file changed on both sides is listed as a conflict to check.\n");
+		conflicts = new Set(upstream.filter((c) => local.has(c.path)).map((c) => c.path));
+	}
+
+	let report = classifyTemplateChanges({ upstream, local, conflicts, templateFiles });
 	report = withRetiredInstructionFiles(report, (p) => existsSync(join(vault, p)));
 
-	process.stdout.write(
-		asJson
-			? `${JSON.stringify({ mode, from, to, report, settleFirst: settleFirst(report) }, null, 2)}\n`
-			: `${formatUpgradeReport(report, `v${from}`, `v${to}`)}\n`,
-	);
+	const from = manifestVersion(git(vault, ["show", "HEAD:vault-manifest.json"]).stdout);
+	const to = manifestVersion(git(vault, ["show", `${ref}:vault-manifest.json`]).stdout);
+	process.stdout.write(asJson ? `${JSON.stringify({ from, to, report }, null, 2)}\n` : `${formatUpgradeReport(report, `v${from}`, `v${to}`)}\n`);
 }
 
 if (isMainModule(import.meta.url)) main();

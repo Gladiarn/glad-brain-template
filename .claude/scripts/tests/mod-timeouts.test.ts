@@ -1,6 +1,6 @@
 /**
- * The obsidian-mind mod runs the vault's hook scripts itself, with a timeout
- * for each (.claude/skills/obsidian-mind/hooks/register.ts). Each must equal
+ * The glad-brain mod runs the vault's hook scripts itself, with a timeout
+ * for each (.claude/skills/glad-brain/hooks/register.ts). Each must equal
  * the timeout settings.json gives the same script as a hook, so the mod never
  * waits longer, or gives up sooner, than the hook it replaces would.
  */
@@ -11,7 +11,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "../../..");
-const REGISTER = join(REPO, ".claude/skills/obsidian-mind/hooks/register.ts");
+const REGISTER = join(REPO, ".claude/skills/glad-brain/hooks/register.ts");
 
 /** Each script the mod runs, with the timeout it passes, in milliseconds. */
 export function modTimeouts(source: string): Map<string, number> {

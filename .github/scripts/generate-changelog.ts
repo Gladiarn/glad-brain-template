@@ -141,8 +141,11 @@ export function insertChangelogSection(
 	// flag for `^`, and `m` makes `$` match end-of-*line* as well — which let
 	// the lazy `[\s\S]*?` stop right after the heading, leaving the rest of
 	// the section's old body behind on replace.
+	// A section also ends at a blank line followed by plain text (not a
+	// heading or a list item), so a closing footer line below the last
+	// section is not swallowed when that section is replaced.
 	const existingPattern = new RegExp(
-		`^## ${escapeRegex(version)} — [\\s\\S]*?(?=\\n## [^\\n]|(?![\\s\\S]))`,
+		`^## ${escapeRegex(version)} — [\\s\\S]*?(?=\\n## [^\\n]|\\n\\n+[^\\s#-]|(?![\\s\\S]))`,
 		"m",
 	);
 
@@ -423,48 +426,14 @@ function updateManifest(version: string, prevTag: string | null): void {
 	);
 }
 
-/**
- * Replace the top-level `version:` line in `.shardmind/shard.yaml` with the
- * normalized release version. The shard manifest is what `shardmind install`
- * shows in its wizard header — keeping it in lockstep with vault-manifest.json
- * means a release commit bumps both, identical to how CHANGELOG.md gets a
- * matching section. ENOENT-tolerant so non-shardmind clones (no .shardmind/)
- * stay releasable.
- */
-export function bumpShardYamlVersion(content: string, version: string): string {
-	const normalized = normalizeVersion(version);
-	const pattern = /^version:[ \t]*.*$/m;
-	if (!pattern.test(content)) {
-		throw new Error(
-			"shard.yaml is missing a top-level `version:` line — refusing to write.",
-		);
-	}
-	return content.replace(pattern, `version: ${normalized}`);
-}
-
-function updateShardYaml(version: string): void {
-	const path = ".shardmind/shard.yaml";
-	let content: string;
-	try {
-		content = readFileSync(path, { encoding: "utf-8" });
-	} catch (err) {
-		if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-			process.stderr.write(`${path} not present — skipping shard version bump.\n`);
-			return;
-		}
-		throw err;
-	}
-	writeFileSync(path, bumpShardYamlVersion(content, version), { encoding: "utf-8" });
-}
-
 /** Where the template's Claude Code mod declares its version. */
-export const PLUGIN_JSON = ".claude/skills/obsidian-mind/.claude-plugin/plugin.json";
+export const PLUGIN_JSON = ".claude/skills/glad-brain/.claude-plugin/plugin.json";
 
 /**
  * Set the mod's `version` in its plugin.json to the release version. The mod
  * ships inside the template, so it carries the template's version; Claude
  * Code's strict validation requires the field, and a release owns it like it
- * owns vault-manifest.json and shard.yaml. Key order and formatting are kept.
+ * owns vault-manifest.json. Key order and formatting are kept.
  */
 export function bumpPluginJsonVersion(content: string, version: string): string {
 	const plugin = JSON.parse(content) as Record<string, unknown>;
@@ -517,7 +486,6 @@ function main(): void {
 
 	prependToChangelog(section, version);
 	updateManifest(version, prevTag);
-	updateShardYaml(version);
 	updatePluginJson(version);
 
 	// Print section for GitHub Release body

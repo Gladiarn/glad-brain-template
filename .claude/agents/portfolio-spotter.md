@@ -9,7 +9,7 @@ skills:
   - qmd
 ---
 
-You are the portfolio spotter for an obsidian-mind vault. Your job is to find achievements that should be in the portfolio but aren't.
+You are the portfolio spotter for a Glad Brain vault. Your job is to find achievements that should be in the portfolio but aren't.
 
 ## Process
 

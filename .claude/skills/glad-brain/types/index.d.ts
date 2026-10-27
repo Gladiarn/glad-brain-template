@@ -4,7 +4,7 @@
 
 declare module "claude-code" {
 	interface PluginState {
-		"obsidian-mind": {
+		"glad-brain": {
 			/** The session context this session's instruction file carries; null when none was delivered. */
 			context: string | null;
 			/**

@@ -1,6 +1,6 @@
 name: Mod
 
-# The Claude Code mod in .claude/skills/obsidian-mind/ is checked by Claude
+# The Claude Code mod in .claude/skills/glad-brain/ is checked by Claude
 # Code itself: `plugin validate --strict` reads its manifest and module the way
 # the engine will and refuses what the engine would, and `plugin test` runs its
 # *.test.ts files against the real engine.
@@ -15,7 +15,7 @@ on:
     # The mod runs the vault's hook scripts, so any change under
     # .claude/scripts/ (lib/ included) can change what it delivers.
     paths: &mod-paths
-      - '.claude/skills/obsidian-mind/**'
+      - '.claude/skills/glad-brain/**'
       - '.claude/scripts/**'
       # The README check below reads every README's hooks and calls lines.
       - 'README*.md'
@@ -47,13 +47,13 @@ jobs:
         run: npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" && claude --version
       - name: Validate the mod
         shell: bash
-        run: claude plugin validate --strict .claude/skills/obsidian-mind
+        run: claude plugin validate --strict .claude/skills/glad-brain
       - name: Every README shows the hooks and calls validate reports
         shell: bash
         run: |
           # The READMEs quote these two lines so a user can check the mod before
           # trusting the folder; a mod that gains a hook or a call must say so.
-          out=$(claude plugin validate .claude/skills/obsidian-mind 2>&1 | sed 's/\x1b\[[0-9;]*m//g')
+          out=$(claude plugin validate .claude/skills/glad-brain 2>&1 | sed 's/\x1b\[[0-9;]*m//g')
           for kind in hooks calls; do
             line=$(printf '%s\n' "$out" | grep "register.ts $kind:" | sed 's/^[[:space:]]*//' | tr -d '\r')
             [ -n "$line" ] || { echo "::error::validate printed no $kind line"; exit 1; }
@@ -71,7 +71,7 @@ jobs:
           done
       - name: Test the mod
         shell: bash
-        run: claude plugin test .claude/skills/obsidian-mind
+        run: claude plugin test .claude/skills/glad-brain
       - name: The checks left nothing behind
         shell: bash
         run: |

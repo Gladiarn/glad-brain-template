@@ -83,7 +83,9 @@ describe("the repo's own files", () => {
 		if (!existsSync(join(REPO_ROOT, ".git"))) return;
 		const r = spawnSync("git", ["ls-files", "--cached", "--others", "--exclude-standard"], { cwd: REPO_ROOT, encoding: "utf8", windowsHide: true });
 		assert.equal(r.status, 0);
-		const files = r.stdout.split("\n").filter((l) => l !== "");
+		// A file deleted in the working tree but not yet committed is still in the index. The guard
+		// ignores deletions (--diff-filter=ACMT), so only files that exist can break the allowlist.
+		const files = r.stdout.split("\n").filter((l) => l !== "" && existsSync(join(REPO_ROOT, l)));
 		assert.ok(files.length > 100);
 		assert.deepEqual(checkTemplatePaths(files, globs), []);
 	});

@@ -19,7 +19,6 @@ import {
 	findLatestOpenFingerprint,
 	compareFingerprintKeys,
 	bumpPluginJsonVersion,
-	bumpShardYamlVersion,
 	PLUGIN_JSON,
 	insertChangelogSection,
 } from "../../../.github/scripts/generate-changelog.ts";
@@ -250,7 +249,7 @@ describe("pickMarkers", () => {
 });
 
 describe("bumpPluginJsonVersion", () => {
-	const FIXTURE = JSON.stringify({ name: "obsidian-mind", version: "8.6.0", description: "d", types: "./types/index.d.ts" }, null, 2) + "\n";
+	const FIXTURE = JSON.stringify({ name: "glad-brain", version: "8.6.0", description: "d", types: "./types/index.d.ts" }, null, 2) + "\n";
 
 	test("sets the mod's version to the normalized release version, keeping key order", () => {
 		const out = bumpPluginJsonVersion(FIXTURE, "v9.0");
@@ -260,7 +259,7 @@ describe("bumpPluginJsonVersion", () => {
 	});
 
 	test("refuses a plugin.json without a version", () => {
-		assert.throws(() => bumpPluginJsonVersion('{"name":"obsidian-mind"}', "v9.0"), /no string `version`/);
+		assert.throws(() => bumpPluginJsonVersion('{"name":"glad-brain"}', "v9.0"), /no string `version`/);
 	});
 
 	test("the shipped mod carries the template's version", () => {
@@ -268,65 +267,6 @@ describe("bumpPluginJsonVersion", () => {
 		const plugin = JSON.parse(readFileSync(join(repo, PLUGIN_JSON), "utf-8")) as { version: string };
 		const manifest = JSON.parse(readFileSync(join(repo, "vault-manifest.json"), "utf-8")) as { version: string };
 		assert.equal(plugin.version, manifest.version, "a release bumps both; between releases they must agree");
-	});
-});
-
-describe("bumpShardYamlVersion", () => {
-	const FIXTURE = [
-		"apiVersion: v1",
-		"name: obsidian-mind",
-		"namespace: breferrari",
-		"version: 6.0.0-beta.1",
-		'description: "AI-augmented Obsidian vault"',
-		"",
-	].join("\n");
-
-	test("rewrites the top-level version line", () => {
-		const out = bumpShardYamlVersion(FIXTURE, "v6.0");
-		assert.match(out, /^version: 6\.0\.0$/m);
-		assert.doesNotMatch(out, /6\.0\.0-beta\.1/);
-	});
-
-	test("normalizes the version (v6.1 → 6.1.0)", () => {
-		const out = bumpShardYamlVersion(FIXTURE, "v6.1");
-		assert.match(out, /^version: 6\.1\.0$/m);
-	});
-
-	test("preserves surrounding lines", () => {
-		const out = bumpShardYamlVersion(FIXTURE, "v6.0");
-		assert.match(out, /^apiVersion: v1$/m);
-		assert.match(out, /^name: obsidian-mind$/m);
-		assert.match(out, /^namespace: breferrari$/m);
-		assert.match(out, /^description: /m);
-	});
-
-	test("idempotent when run twice with the same version", () => {
-		const once = bumpShardYamlVersion(FIXTURE, "v6.0");
-		const twice = bumpShardYamlVersion(once, "v6.0");
-		assert.equal(once, twice);
-	});
-
-	test("throws when no version line is present", () => {
-		const broken = "apiVersion: v1\nname: thing\n";
-		assert.throws(() => bumpShardYamlVersion(broken, "v6.0"), /version:/);
-	});
-
-	test("only rewrites the top-level version, not nested ones", () => {
-		// The regex anchors to a leftmost-column `version:`, so an indented
-		// `version:` inside a list (e.g. shardmind migrations entries) must
-		// be left alone. Use an actually-indented `version:` here, not a
-		// look-alike key like `from_version:` — the latter wouldn't match
-		// the regex regardless and so wouldn't exercise the anchor.
-		const withNested = [
-			"version: 6.0.0-beta.1",
-			"migrations:",
-			"  - version: 5.0.0",
-			"    note: keep this nested version untouched",
-		].join("\n");
-		const out = bumpShardYamlVersion(withNested, "v6.0");
-		assert.match(out, /^version: 6\.0\.0$/m);
-		assert.match(out, /^  - version: 5\.0\.0$/m);
-		assert.match(out, /note: keep this nested version untouched/);
 	});
 });
 
@@ -378,6 +318,34 @@ describe("insertChangelogSection", () => {
 		assert.doesNotMatch(out, /- old entry/);
 		assert.match(out, /- first release/);
 		assert.equal((out.match(/## v2\.0\.0/g) ?? []).length, 1);
+	});
+
+	test("replacing the last section keeps a closing footer line", () => {
+		const footer = "Versions before 1.0.0 are an upstream project's history: https://example.com/CHANGELOG.md";
+		const content = [
+			"# Changelog",
+			"",
+			"## v1.0.0 — 2026-01-01",
+			"",
+			"### Added",
+			"- first release",
+			"",
+			footer,
+			"",
+		].join("\n");
+		const section = "## v1.0.0 — 2026-01-02\n\n### Added\n- corrected entry\n";
+		const out = insertChangelogSection(content, section, "v1.0.0");
+		assert.match(out, /- corrected entry/);
+		assert.doesNotMatch(out, /- first release/);
+		assert.ok(out.includes(footer), "the footer line must survive a replace");
+	});
+
+	test("a new section goes above an existing one and above the footer", () => {
+		const footer = "Versions before 1.0.0 are an upstream project's history.";
+		const content = `# Changelog\n\n## v1.0.0 — 2026-01-01\n\n### Added\n- first\n\n${footer}\n`;
+		const out = insertChangelogSection(content, "## v1.1.0 — 2026-02-01\n\n### Fixed\n- b\n", "v1.1.0");
+		assert.ok(out.indexOf("## v1.1.0") < out.indexOf("## v1.0.0"));
+		assert.ok(out.indexOf("## v1.0.0") < out.indexOf(footer));
 	});
 
 	test("falls back to prepending a fresh header when none exists", () => {

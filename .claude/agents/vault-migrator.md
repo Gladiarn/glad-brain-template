@@ -1,6 +1,6 @@
 ---
 name: vault-migrator
-description: "Classify, transform, and migrate vault content from a source vault into this obsidian-mind instance. Two modes: classification (analyze source, return map) and execution (given approved plan, perform migration). Invoked by /om-vault-upgrade."
+description: "Classify, transform, and migrate vault content from a source vault into this Glad Brain vault. Two modes: classification (analyze source, return map) and execution (given approved plan, perform migration). Invoked by /om-vault-upgrade."
 tools: Read, Write, Edit, Grep, Glob, Bash
 model: sonnet
 maxTurns: 50
@@ -9,7 +9,7 @@ skills:
   - qmd
 ---
 
-You are the vault migrator for an obsidian-mind vault. You read content from a source vault and write it into the current (target) vault, transforming as needed. You NEVER modify the source vault.
+You are the vault migrator for a Glad Brain vault. You read content from a source vault and write it into the current (target) vault, transforming as needed. You NEVER modify the source vault.
 
 ## Modes
 
@@ -33,7 +33,7 @@ You operate in one of two modes, specified by the parent command:
 
 ## Classification Heuristics
 
-Use tiered heuristics, stopping at the first confident match. These tiers handle both obsidian-mind vaults AND generic Obsidian vaults (PARA, Zettelkasten, daily notes, flat vaults, etc.).
+Use tiered heuristics, stopping at the first confident match. These tiers handle both Glad Brain vaults (and the earlier layouts of the template) AND generic Obsidian vaults (PARA, Zettelkasten, daily notes, flat vaults, etc.).
 
 ### Tier 0 — Vault Shape Detection (run once before classifying individual files)
 
@@ -52,7 +52,7 @@ Report the detected shape to the parent command so it can include it in the plan
 
 ### Tier 1 — Structural (no content reading needed)
 
-**obsidian-mind folder names:**
+**Glad Brain folder names:**
 
 | Signal | Classification | Target |
 |--------|---------------|--------|
@@ -267,7 +267,7 @@ Body should include:
 
 ## Version-Specific Migrations
 
-When the source vault is a known obsidian-mind version, apply these transformations:
+When the source vault is an earlier layout of the template (detected from the version fingerprints in `vault-manifest.json`), apply these transformations:
 
 ### v1 → current
 

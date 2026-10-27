@@ -104,7 +104,7 @@ export const MARKER_PREFIX = "GATE-MARK-";
 
 /** The question asked at every main-loop checkpoint. */
 export const QUESTION = [
-	"Without using any tool, reply with two things from the obsidian-mind session context you were given, verbatim:",
+	"Without using any tool, reply with two things from the glad-brain session context you were given, verbatim:",
 	"(1) its last line, the one that starts with _context injected;",
 	`(2) the token in it that starts with ${MARKER_PREFIX}.`,
 	"Write NONE for any you cannot see.",
@@ -544,7 +544,7 @@ function emptyTrustedDir(dir: string): void {
 	if (entries.length > 0 && !entries.includes(FIXTURE_MARK))
 		throw new Error(`--trusted-dir ${dir} is not empty and not the gate's own; give it an empty folder`);
 	for (const entry of entries) if (entry !== FIXTURE_MARK) rmSync(join(dir, entry), { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
-	writeFileSync(join(dir, FIXTURE_MARK), "This folder belongs to the obsidian-mind delivery gate, which empties it before and after each session.\n");
+	writeFileSync(join(dir, FIXTURE_MARK), "This folder belongs to the Glad Brain delivery gate, which empties it before and after each session.\n");
 }
 
 /**
@@ -584,14 +584,14 @@ export function buildFixture(
 	}
 	if (notes >= MARKER_NOTE) writeMarkerNote(vault, marker);
 	if (breakage !== "none") {
-		const register = join(vault, ".claude/skills/obsidian-mind/hooks/register.ts");
+		const register = join(vault, ".claude/skills/glad-brain/hooks/register.ts");
 		const source = readFileSync(register, "utf8");
 		const broken = source.replace(DELIVERY, BROKEN[breakage]);
 		if (broken === source) throw new Error(`self-test: the ${breakage} breakage did not land; the mod changed shape`);
 		writeFileSync(register, broken);
 	}
 	if (!withMod) {
-		writeFileSync(join(vault, ".claude/settings.local.json"), JSON.stringify({ enabledPlugins: { "obsidian-mind@skills-dir": false } }, null, 2) + "\n");
+		writeFileSync(join(vault, ".claude/settings.local.json"), JSON.stringify({ enabledPlugins: { "glad-brain@skills-dir": false } }, null, 2) + "\n");
 	}
 	spawnSync("git", ["init", "-q"], { cwd: vault });
 	return vault;
@@ -743,7 +743,7 @@ function session(
 		args.push("--tools", "Agent", "--allowedTools", "Agent", "--setting-sources", "project,local", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}');
 		args.push("--max-budget-usd", SESSION_BUDGET_USD);
 		// In a trusted folder the mod is found the way a user's is; elsewhere it is loaded by path.
-		if (options.withMod && options.trustedDir === undefined) args.push("--plugin-dir", join(vault, ".claude/skills/obsidian-mind"));
+		if (options.withMod && options.trustedDir === undefined) args.push("--plugin-dir", join(vault, ".claude/skills/glad-brain"));
 		const child = spawn(options.claude, args, { cwd: vault, env: fixtureEnv(vault), stdio: ["pipe", "pipe", "pipe"] });
 		let out = "";
 		let pending = ""; // the line still arriving

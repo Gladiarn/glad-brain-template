@@ -22,8 +22,8 @@ export function modPreface(modName: string): string {
 	return `Stop hook report, handed over with this message: when one of your earlier responses this session ended, these findings were new or changed since the last report. The user saw one line naming them under that response. Deal with this message first (it may be the user's, or a vault notice from the ${modName} plugin), ${DECIDE}`;
 }
 
-/** The framing under obsidian-mind's own mod. */
-export const MOD_PREFACE = modPreface("obsidian-mind");
+/** The framing under Glad Brain's own mod. */
+export const MOD_PREFACE = modPreface("glad-brain");
 
 /** The closing line of the summary: where the detail went. */
 export const SUMMARY_TRAILER = "The full report reaches the agent with your next message.";

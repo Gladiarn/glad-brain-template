@@ -4,7 +4,7 @@ How much a session loads before the first message. Numbers are bytes.
 
 ## Baseline tests
 
-obsidian-mind v10.0.0 at import: 2252 tests, 2235 pass, 17 skipped, 0 fail (`cd .claude/scripts && npm test`).
+The upstream code at import (its v10.0.0): 2252 tests, 2235 pass, 17 skipped, 0 fail (`cd .claude/scripts && npm test`).
 
 The only failure on the raw merge was this repo's own design spec, whose `Date:` and `Status:` lines were one paragraph. I separated them with a blank line so the vault's prose-width gate passes.
 

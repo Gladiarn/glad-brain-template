@@ -21,7 +21,7 @@ Defined in `.claude/commands/`. Claude Code auto-surfaces every command with its
 | Folder | Purpose | Key Files |
 |--------|---------|-----------|
 | `.claude/commands/` | Slash commands (auto-surfaced in-session; catalog in `brain/Skills.md`) | One `.md` per command |
-| `.claude/skills/` | Obsidian + QMD skills, and the `obsidian-mind` Claude Code mod | Skills load via the Skill tool; the mod loads as a plugin on Claude Code 2.1.287+ |
+| `.claude/skills/` | Obsidian + QMD skills, and the `glad-brain` Claude Code mod | Skills load via the Skill tool; the mod loads as a plugin on Claude Code 2.1.287+ |
 
 ## Rule
 

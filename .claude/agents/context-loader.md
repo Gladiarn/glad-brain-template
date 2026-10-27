@@ -9,7 +9,7 @@ skills:
   - qmd
 ---
 
-You are the context loader for an obsidian-mind vault. Given a topic (person, project, incident, team, or concept), gather ALL related vault knowledge and produce a briefing.
+You are the context loader for a Glad Brain vault. Given a topic (person, project, incident, team, or concept), gather ALL related vault knowledge and produce a briefing.
 
 ## Input
 

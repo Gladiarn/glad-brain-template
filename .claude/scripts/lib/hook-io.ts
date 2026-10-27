@@ -299,7 +299,7 @@ export function writeSilentHookOutput(): void {
 }
 
 /**
- * The Stop report as data, for the obsidian-mind mod's own run
+ * The Stop report as data, for the Glad Brain mod's own run
  * (`om_mod: "report"`, lib/om-mod.ts). Not a hook envelope: the mod parses it
  * and decides what the user and the agent see.
  *
