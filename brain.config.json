@@ -1,0 +1,7 @@
+{
+	"geminiModel": "gemini-3.8-flash",
+	"fallbackModel": "sonnet",
+	"qmdEnabled": true,
+	"maxFixRounds": 2,
+	"shrinkLimit": 0.4
+}

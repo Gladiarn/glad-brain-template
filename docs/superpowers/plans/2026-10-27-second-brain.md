@@ -254,6 +254,10 @@
   - `--notes` without `--yes` prints the changed-note count and runs nothing
   - `--notes --yes` without `GEMINI_API_KEY` refuses, with a message saying it will not fall back to Claude (anti-goal: unexpected Claude usage)
   - `--notes --yes` with the key runs the Step 0 command with the configured model
+- [ ] **Step 1b:** `brain view` opens `graphify-out/graph.html` in the Windows browser. Test it with a fake opener on PATH:
+  - it tries `wslview`, then `explorer.exe` with the path from `wslpath -w`, then `xdg-open`, in that order
+  - when no graph exists it prints "run brain graph first" and exits 1
+  - `docs/brain-setup.md` adds a "Viewing your brain" section covering Obsidian Graph view, Canvas, `brain view`, and the optional graphify-visualizer and 3D Graph community plugins
 - [ ] **Step 2:** FAIL. **Step 3:** Implement. **Step 4:** PASS. After a successful save, Task 7 runs `graphCommand({notes:true, yes:true})` only when the key is set and the rate limit wasn't hit in this save. Failures become a log note, never a save failure.
 
 ### Task 11: Secret guard and template guard

@@ -1,0 +1,495 @@
+#!/usr/bin/env node
+/**
+ * qmd-mcp.mjs — cross-platform MCP launcher for QMD.
+ *
+ * Does three things no bare `qmd mcp` invocation can do:
+ *
+ *   1. Bypass the Windows .cmd/.ps1 shim. Claude Code spawns MCP servers
+ *      without a shell, and even `shell: true` isn't enough: the shim
+ *      delegates to /bin/sh via %_prog%, which fails on stock Windows without
+ *      Git Bash's sh.exe on PATH. We resolve @tobilu/qmd/dist/cli/qmd.js and
+ *      spawn it with the current Node binary — no shell, no shim, same code
+ *      path on every platform.
+ *
+ *   2. Scope the MCP server to this vault's named index. If vault-manifest.json
+ *      declares a `qmd_index`, pass `--index <name>` so the MCP reads the same
+ *      SQLite store as the SessionStart hook and the CLI.
+ *
+ *   3. Work around a qmd 2.1.0 bug. `qmd --index <name> mcp` currently ignores
+ *      the --index flag (mcp/server.js calls getDefaultDbPath() without the
+ *      configured name). Setting INDEX_PATH forces the correct SQLite path
+ *      regardless — store.js honors INDEX_PATH unconditionally. We keep
+ *      --index on argv too so a future qmd fix works without a wrapper change.
+ *
+ * Fallback: if @tobilu/qmd isn't resolvable, fall through to a bare `qmd`
+ * command with shell: true so non-npm installations still have a chance to
+ * work. When an index is configured, the INDEX_PATH env var still applies.
+ */
+
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { createRequire } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { homedir } from "node:os";
+
+const require = createRequire(import.meta.url);
+
+/**
+ * Resolve the wrapper's vault root from a `file://` URL and optional env
+ * override. Kept as a pure helper (both inputs passed in) so tests can lock
+ * the path math without depending on the current process's working directory
+ * or CLAUDE_PROJECT_DIR. Layout assumption: the wrapper lives at
+ * `<vault>/.claude/scripts/qmd-mcp.mjs`, so the vault root is two levels up.
+ *
+ * CLAUDE_PROJECT_DIR names the folder the session was launched in, which can
+ * be a vault subfolder (#263), so the root is the nearest folder at or above
+ * it that holds vault-manifest.json, as lib/project-dir.ts resolves it for the
+ * hooks. With no manifest above, the named folder itself.
+ */
+export function resolveVaultRoot(metaUrl, env = process.env) {
+	// A regular file, as the hook commands' `[ -f ]` tests: a directory of that name is not a vault.
+	const isFile = (path) => {
+		try {
+			return statSync(path, { throwIfNoEntry: false })?.isFile() ?? false;
+		} catch {
+			return false;
+		}
+	};
+	const envRoot = env["CLAUDE_PROJECT_DIR"];
+	if (envRoot && isAbsolute(envRoot)) {
+		for (let dir = envRoot; ; dir = dirname(dir)) {
+			if (isFile(join(dir, "vault-manifest.json"))) return dir;
+			if (dirname(dir) === dir) return envRoot;
+		}
+	}
+	return resolve(dirname(fileURLToPath(metaUrl)), "..", "..");
+}
+
+// Resolved once at module load. Manifest lookups use this instead of the
+// current working directory, so a drifted MCP-host CWD can't silently break
+// per-vault isolation.
+const VAULT_ROOT = resolveVaultRoot(import.meta.url);
+
+/**
+ * Locate @tobilu/qmd's real JS entrypoint. Returns an absolute path when
+ * resolvable, null when not. Exported so the cross-platform test matrix can
+ * verify resolution works on Windows, macOS, and Linux without having to
+ * spawn the wrapper itself. A runnable install is preferred over one that
+ * merely exists — see `pickQmdEntry`.
+ */
+export function resolveQmdEntry() {
+	return pickQmdEntry([localQmdEntry, globalQmdEntry], isRunnableQmdEntry);
+}
+
+/**
+ * Choose among candidate entrypoints, in order. Duplicated from
+ * `lib/qmd.ts:pickQmdEntry` (this file is .mjs and can't import the .ts lib
+ * at strip-types runtime); the test suite drives both copies through the
+ * same cases.
+ *
+ * - The first present candidate that passes `runnable` wins, so a broken
+ *   first install cannot shadow a working later one.
+ * - When every present candidate fails, the FIRST present one is returned,
+ *   not null: SessionStart's ABI self-heal needs a broken entry to find the
+ *   package it rebuilds.
+ * - A lone candidate is returned without a probe, since probing could not
+ *   change the answer.
+ */
+export function pickQmdEntry(sources, runnable) {
+	let firstPresent = null;
+	for (let i = 0; i < sources.length; i++) {
+		const entry = sources[i]();
+		if (entry === null) continue;
+		if (firstPresent === null && i === sources.length - 1) return entry;
+		if (runnable(entry)) return entry;
+		firstPresent ??= entry;
+	}
+	return firstPresent;
+}
+
+/** Does this entrypoint actually start? Bounded `--version` probe. */
+export function isRunnableQmdEntry(entry) {
+	const probe = spawnSync(process.execPath, [entry, "--version"], {
+		encoding: "utf8",
+		timeout: 10_000,
+		windowsHide: true,
+	});
+	return !probe.error && probe.signal === null && probe.status === 0;
+}
+
+function localQmdEntry() {
+	try {
+		return require.resolve("@tobilu/qmd/dist/cli/qmd.js");
+	} catch {
+		return null;
+	}
+}
+
+function readTextOrNull(path) {
+	try {
+		return readFileSync(path, "utf8");
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * The duplicate of lib/qmd.ts's npmGlobalRoot (and, below, globalQmdEntry and
+ * askNpmForRoot), kept in step by hand: change
+ * that one first, then carry the change here with the types removed.
+ *
+ * Where npm keeps global packages, without spawning it (#349): `npm root -g`
+ * is a shell plus a Node start on every resolve (0.1-1 s on CI runners,
+ * measured 2026-10-13, #349). Only the
+ * cheap exact cases are worked out here; anything else returns null, and the
+ * caller asks npm, which gives its exact answer at the old cost.
+ *
+ * 1. npm_config_prefix in the env (any case): use it if it's an absolute path
+ *    with no `${` and no surrounding whitespace, else ask npm.
+ * 2. PREFIX, DESTDIR, npm_config_userconfig or npm_config_globalconfig set →
+ *    ask npm.
+ * 3. ~/.npmrc (HOME before the OS home) or `<node prefix>/etc/npmrc` has a
+ *    line setting `prefix` or `globalconfig`, sections included, or a key
+ *    npm's ini would rewrite (quoted, which it unquotes, escapes and all;
+ *    built from `${…}`; or holding `;` or `#`, which cut it, brackets, a
+ *    backslash or whitespace) → ask npm. An npmrc with only auth or
+ *    registry lines (or `save-prefix`) doesn't count.
+ * 4. The builtin npmrc: on Windows, the installer's exact
+ *    `prefix=${APPDATA}\npm` → %APPDATA%\npm. Any other line there setting
+ *    `prefix`, `globalconfig` or `userconfig` (which moves the user npmrc),
+ *    or a key npm's ini would rewrite → ask npm.
+ * 5. Otherwise Node's own prefix.
+ *
+ * 4 and 5 hold only when npm sits beside this Node; where it doesn't
+ * (Homebrew, Debian's packaged npm), ask npm. Env values are read as npm
+ * reads them: only "" skipped, nothing trimmed, the last of several winning
+ * (@npmcli/config's loadEnv, read in npm 10.9.2 on 2026-10-14). Rule 3 needs a home: when
+ * the OS can't name one (a UID with no passwd entry), ask npm.
+ *
+ * Packages sit in `<prefix>\node_modules` on Windows and
+ * `<prefix>/lib/node_modules` elsewhere.
+ */
+export function npmGlobalRoot(at = {}) {
+	const vars = at.env ?? process.env;
+	const win = (at.platform ?? process.platform) === "win32";
+	const execPath = at.execPath ?? process.execPath;
+	const readText = at.readText ?? readTextOrNull;
+	// Rule 1's env reading: the last non-empty value, untrimmed.
+	const npmConfig = (key) => {
+		const want = `npm_config_${key}`;
+		let found;
+		for (const [name, value] of Object.entries(vars)) {
+			if (name.toLowerCase() === want && value) found = value;
+		}
+		return found;
+	};
+	const lines = (file) =>
+		(readText(file) ?? "").split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "" && !/^[;#]/.test(l));
+	// Rules 3 and 4: a line setting one of `keys`, or one whose key npm's
+	// ini would turn into something this can't read: quoted (unquoted and
+	// decoded), built from `${…}`, or holding `;` or `#` (ini cuts the key
+	// there), brackets, a backslash or whitespace. Auth keys (`//host/path/:_authToken`, with % ~ +) are
+	// plain. Section headers set nothing.
+	const settingLines = (file, keys = ["prefix", "globalconfig"]) =>
+		lines(file).filter((l) => {
+			if (l.startsWith("[")) return false;
+			const key = l.split("=", 1)[0].trim();
+			return keys.includes(key.toLowerCase()) || /^["']|\$\{|[\s[\]\\;#]/.test(key);
+		});
+	// Absolute in npm's sense: on a Windows host, `\npm` is drive-relative.
+	// Padded values ask npm: how its path handling treats them is not read here.
+	const exactPath = (value) =>
+		value === value.trim() &&
+		isAbsolute(value) &&
+		!value.includes("${") &&
+		(process.platform !== "win32" || !/^[\\/](?![\\/])/.test(value));
+	const layout = (prefix) => (win ? join(prefix, "node_modules") : join(prefix, "lib", "node_modules"));
+
+	// 1.
+	const fromEnv = npmConfig("prefix");
+	if (fromEnv !== undefined) return exactPath(fromEnv) ? layout(fromEnv) : null;
+
+	// 2.
+	if (vars["PREFIX"] || vars["DESTDIR"] || npmConfig("userconfig") !== undefined || npmConfig("globalconfig") !== undefined) {
+		return null;
+	}
+
+	// 3.
+	let home;
+	try {
+		home = at.home ?? (vars["HOME"] || (at.osHome ?? homedir)());
+	} catch {
+		return null; // no home to find ~/.npmrc in (a UID with no passwd entry)
+	}
+	const nodePrefix = win ? dirname(execPath) : dirname(dirname(execPath));
+	if (settingLines(join(home, ".npmrc")).length > 0 || settingLines(join(nodePrefix, "etc", "npmrc")).length > 0) {
+		return null;
+	}
+
+	// 4 and 5 hold only for the npm that sits beside this Node; Homebrew and
+	// Debian keep npm (and its builtin npmrc) elsewhere, so ask npm there.
+	const npmDir = join(win ? nodePrefix : join(nodePrefix, "lib"), "node_modules", "npm");
+	if (readText(join(npmDir, "package.json")) === null) return null;
+
+	// 4.
+	const builtin = settingLines(join(npmDir, "npmrc"), ["prefix", "globalconfig", "userconfig"]);
+	if (builtin.length === 0) return layout(nodePrefix); // 5.
+	const appdata = vars["APPDATA"];
+	if (!win || builtin.length !== 1 || builtin[0] !== "prefix=${APPDATA}\\npm" || !appdata || !exactPath(appdata)) {
+		return null;
+	}
+	// npm's global npmrc then lives under that prefix.
+	const prefix = join(appdata, "npm");
+	return settingLines(join(prefix, "etc", "npmrc")).length > 0 ? null : layout(prefix);
+}
+
+/** @tobilu/qmd's entry under a global root, when it is there. */
+function qmdEntryUnder(root) {
+	const entry = join(root, "@tobilu", "qmd", "dist", "cli", "qmd.js");
+	return existsSync(entry) ? entry : null;
+}
+
+/**
+ * qmd's entry under npm's global root: under the root `npmGlobalRoot` works
+ * out when qmd is there, else under npm's own answer. A worked-out root
+ * models the npm beside this Node, and the npm on PATH can differ (a
+ * self-upgraded npm on Windows, mixed installs; inferred), so a miss there
+ * still asks npm (#399, 2026-10-14).
+ */
+export function globalQmdEntry(computed = npmGlobalRoot(), askNpm = askNpmForRoot) {
+	const known = computed === null ? null : qmdEntryUnder(computed);
+	if (known !== null) return known;
+	const root = askNpm();
+	return root === null ? null : qmdEntryUnder(root);
+}
+
+function askNpmForRoot() {
+	// Fallback for global npm installs that aren't on this package's resolution
+	// path — ask npm directly where global packages live. Bounded timeout so a
+	// hung npm process can't block MCP server startup indefinitely.
+	//
+	// Single-string command with shell:true rather than args+shell so this
+	// stays clean on Node 24 (DEP0190 — args concatenated with shell:true is
+	// an injection risk in the general case; our command is a literal
+	// constant so the concatenated form is safe).
+	// windowsHide: under a windowless parent, a shell started without it opens a console window.
+	const npmRoot = spawnSync("npm root -g", {
+		shell: true,
+		encoding: "utf8",
+		timeout: 3000,
+		windowsHide: true,
+	});
+	if (
+		npmRoot.error ||
+		npmRoot.signal !== null ||
+		npmRoot.status !== 0
+	) {
+		return null;
+	}
+
+	// Guard against success-with-empty-stdout or a relative path — either would
+	// make join() produce a path anchored at cwd, and existsSync could then
+	// match a local folder by accident.
+	const root = (npmRoot.stdout ?? "").trim();
+	return root === "" || !isAbsolute(root) ? null : root;
+}
+
+/**
+ * Restricted character set for `qmd_index`. Duplicated from
+ * `lib/session-start.ts:QMD_INDEX_PATTERN` (this file is .mjs and can't
+ * import from the .ts lib at strip-types runtime). The shape is asserted
+ * by the tests — alnum + dot + dash + underscore, must start with alnum.
+ * Rejects path separators, parent-dir refs, whitespace, empty strings.
+ */
+const QMD_INDEX_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/**
+ * Extract the `qmd_index` string from a vault-manifest.json source. Returns
+ * the configured named index (so QMD's storage is scoped to this vault) or
+ * null when the manifest is absent, malformed, missing the field, or the
+ * value fails validation.
+ *
+ * Kept as a pure helper so tests can pass fixture strings. A null return
+ * means "use QMD's default global index" — backwards-compatible with forks
+ * that haven't adopted the field yet.
+ */
+export function readQmdIndex(manifestJson) {
+	if (manifestJson === null) return null;
+	try {
+		const parsed = JSON.parse(manifestJson);
+		if (
+			parsed !== null &&
+			typeof parsed === "object" &&
+			typeof parsed.qmd_index === "string" &&
+			QMD_INDEX_PATTERN.test(parsed.qmd_index)
+		) {
+			return parsed.qmd_index;
+		}
+	} catch {
+		/* malformed manifest → treat as missing */
+	}
+	return null;
+}
+
+/**
+ * Derive an index name from the vault folder. Duplicated from
+ * `lib/session-start.ts:deriveQmdIndex` for the same reason as the pattern
+ * above (this file is .mjs and can't import the .ts lib at strip-types
+ * runtime); the tests assert both copies agree.
+ *
+ * Returns null when the folder name yields no usable slug.
+ */
+export function deriveQmdIndex(vaultRoot) {
+	const slug = basename(resolve(vaultRoot))
+		.normalize("NFKD")
+		.toLowerCase()
+		.replace(/[^a-z0-9._-]+/g, "-")
+		.replace(/-{2,}/g, "-")
+		.replace(/^[^a-z0-9]+|[-._]+$/g, "");
+	return QMD_INDEX_PATTERN.test(slug) ? slug : null;
+}
+
+/**
+ * Read a validated `template` name — the last-resort index name when there is
+ * neither a pin nor a derivable folder slug.
+ */
+function readTemplateName(manifestJson) {
+	if (manifestJson === null) return null;
+	try {
+		const parsed = JSON.parse(manifestJson);
+		if (
+			parsed !== null &&
+			typeof parsed === "object" &&
+			typeof parsed.template === "string" &&
+			QMD_INDEX_PATTERN.test(parsed.template)
+		) {
+			return parsed.template;
+		}
+	} catch {
+		/* malformed manifest → treat as missing */
+	}
+	return null;
+}
+
+/**
+ * The index this vault owns: explicit `qmd_index` pin, else the folder-derived
+ * slug, else the shared `template` name (#137). Null means "use QMD's default
+ * global index".
+ *
+ * The MCP wrapper MUST resolve this exactly the way the SessionStart hook, the
+ * refresh worker, and the bootstrap script do — a disagreement points the
+ * agent's search at a different store than the one being indexed, and fails as
+ * "0 documents" rather than as an error. Mirrors
+ * `lib/session-start.ts:resolveQmdIndex`; the tests assert the two agree.
+ */
+export function resolveQmdIndex(manifestJson, vaultRoot) {
+	return (
+		readQmdIndex(manifestJson) ??
+		deriveQmdIndex(vaultRoot) ??
+		readTemplateName(manifestJson)
+	);
+}
+
+/**
+ * Compute the SQLite store path qmd would use for a given named index, using
+ * the same rule as @tobilu/qmd's store.js (XDG_CACHE_HOME || ~/.cache +
+ * qmd/<indexName>.sqlite). Exported so tests can lock the platform-neutral
+ * behavior — qmd uses this same logic on Linux, macOS, and Windows with no
+ * per-platform branch.
+ */
+export function resolveIndexSqlitePath(indexName, env, home) {
+	// qmd's getDefaultDbPath() without its INDEX_PATH step: this computes the
+	// value INDEX_PATH is set to, and runAsMcp only calls it when INDEX_PATH is
+	// unset. Empty values count as unset (qmd uses `||`), and home is qmd's
+	// qmdHomedir(): HOME, then USERPROFILE, then the OS home.
+	const base = env["XDG_CACHE_HOME"] || join(env["HOME"] || env["USERPROFILE"] || home, ".cache");
+	return join(base, "qmd", `${indexName}.sqlite`);
+}
+
+/**
+ * Build the (command, args, shell) tuple the spawn layer should invoke.
+ * When `qmdIndex` is a non-empty string, `--index <name>` is prepended to
+ * the mcp subcommand; otherwise the invocation matches the pre-per-vault
+ * shape for backward compatibility.
+ *
+ * The shell-fallback path folds args into a single command string so the
+ * spawn site uses shell:true WITHOUT args, dodging Node 24's DEP0190
+ * deprecation of the args+shell concatenation pattern.
+ */
+export function buildLaunchCommand(entry, extraArgs = [], qmdIndex = null) {
+	const mcpArgs = qmdIndex ? ["--index", qmdIndex, "mcp"] : ["mcp"];
+	const qmdArgs = [...mcpArgs, ...extraArgs];
+	return entry
+		? { cmd: process.execPath, args: [entry, ...qmdArgs], shell: false }
+		: { cmd: ["qmd", ...qmdArgs].join(" "), args: [], shell: true };
+}
+
+function readManifestRaw() {
+	try {
+		return readFileSync(join(VAULT_ROOT, "vault-manifest.json"), {
+			encoding: "utf-8",
+		});
+	} catch {
+		return null;
+	}
+}
+
+function runAsMcp() {
+	const qmdIndex = resolveQmdIndex(readManifestRaw(), VAULT_ROOT);
+
+	if (qmdIndex && !process.env["INDEX_PATH"]) {
+		// Apply the qmd 2.1.0 MCP bug workaround: pin the SQLite store to the
+		// named index. Don't clobber a user-supplied INDEX_PATH.
+		process.env["INDEX_PATH"] = resolveIndexSqlitePath(
+			qmdIndex,
+			process.env,
+			homedir(),
+		);
+	}
+
+	const entry = resolveQmdEntry();
+	const { cmd, args, shell } = buildLaunchCommand(
+		entry,
+		process.argv.slice(2),
+		qmdIndex,
+	);
+
+	const child = spawn(cmd, args, { stdio: "inherit", shell });
+
+	// spawn() emits 'error' when the command can't be invoked at all (e.g., qmd
+	// not on PATH in the fallback branch). Without a handler Node would crash
+	// with a stack trace — write a concise message and exit cleanly instead.
+	child.on("error", (err) => {
+		process.stderr.write(
+			`qmd-mcp: failed to start qmd: ${err.message}\n`,
+		);
+		process.exit(1);
+	});
+
+	child.on("exit", (code, signal) => {
+		if (signal !== null) {
+			// Re-raise the signal against ourselves so the parent sees the same
+			// termination cause. Some POSIX signals (SIGKILL, SIGSTOP) or names
+			// unknown on this platform will cause process.kill to throw — in
+			// that case fall back to a conventional non-zero exit.
+			try {
+				process.kill(process.pid, signal);
+			} catch {
+				process.exit(1);
+			}
+			return;
+		}
+		process.exit(code ?? 0);
+	});
+}
+
+// Only spawn a child when this file is the actual entry point. Importing it
+// from tests (to exercise the pure helpers in isolation) must not trigger a
+// spawn.
+const entryUrl = process.argv[1]
+	? pathToFileURL(process.argv[1]).href
+	: null;
+if (entryUrl === import.meta.url) {
+	runAsMcp();
+}

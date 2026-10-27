@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# brain-precommit: block a commit that contains an API key or token.
+#
+# Installed as .git/hooks/pre-commit (a symlink to this file). It uses
+# gitleaks when that is installed, and the built-in scanner when it is not or
+# when gitleaks cannot run. Neither prints the secret itself.
+set -u
+
+self="$(readlink -f "${BASH_SOURCE[0]}")"
+vault="$(cd "$(dirname "$self")/.." && pwd)"
+
+if command -v gitleaks >/dev/null 2>&1; then
+	gitleaks protect --staged --redact --no-banner
+	case $? in
+		0) exit 0 ;;
+		1)
+			echo "secret guard: gitleaks found a secret in the staged change; commit blocked" >&2
+			exit 1
+			;;
+		*) echo "secret guard: gitleaks could not run; using the built-in scan" >&2 ;;
+	esac
+fi
+
+git diff --cached --no-color --unified=0 --no-ext-diff | node --disable-warning=ExperimentalWarning \
+	--experimental-strip-types "$vault/.claude/scripts/brain.ts" scan-diff

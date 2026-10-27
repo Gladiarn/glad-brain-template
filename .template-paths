@@ -1,0 +1,63 @@
+# Paths the public template repo may change. A commit that touches anything
+# else fails the template guard, which keeps the owner's notes out of the
+# template. Globs: ** crosses folders, * stays inside one.
+#
+# Infrastructure
+.claude/**
+.claude-plugin/**
+.codex/**
+.gemini/**
+.github/**
+.scripts/**
+.shardmind/**
+.obsidian/*.json
+bases/**
+bin/**
+docs/**
+templates/**
+
+# Root files
+.gitattributes
+.gitignore
+.graphifyignore
+.mcp.json
+.shardmindignore
+.template-paths
+.template-repo
+AGENTS.md
+ARCHITECTURE.md
+CHANGELOG.md
+CONTRIBUTING.md
+Home.md
+LICENSE
+NOTICE.md
+README*.md
+brain.config.json
+obsidian-mind-demo.gif
+obsidian-mind-logo.png
+projects.map.json
+setup.sh
+vault-manifest.json
+
+# Starter content, empty or generic: the same files every clone starts with
+brain/Gotchas.md
+brain/Key Decisions.md
+brain/Memories.md
+brain/North Star.md
+brain/Patterns.md
+brain/Skills.md
+clients/Clients.md
+clients/contacts/.gitkeep
+portfolio/Portfolio.md
+portfolio/case-studies/.gitkeep
+portfolio/competencies/README.md
+portfolio/wins/.gitkeep
+reference/.gitkeep
+thinking/README.md
+work/Index.md
+work/active/.gitkeep
+work/active/general/next.md
+work/active/general/tasks.md
+work/archive/.gitkeep
+work/incidents/.gitkeep
+work/meetings/README.md

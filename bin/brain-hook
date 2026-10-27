@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# brain-hook <script-name>: the global launcher for the brain's Claude Code hooks.
+#
+# It lives in ~/.claude/settings.json, so it fires in every repo. It does
+# nothing unless the session is in a linked code repo: inside the vault the
+# vault's own settings already fire the same scripts, and running them twice
+# would double the context. It never blocks a session: every path exits 0.
+set -u
+
+script="${1:-}"
+env_file="$HOME/.config/second-brain/.env"
+
+# Only a bare script name from the scripts folder; no paths.
+if [[ ! "$script" =~ ^[a-z0-9-]+\.ts$ ]]; then
+	echo "brain: refusing hook script name '$script'" >&2
+	exit 0
+fi
+
+# The vault-wide hooks have nothing to say in a code repo.
+case "$script" in
+	session-start.ts | classify-message.ts) ;;
+	*) exit 0 ;;
+esac
+
+vault="${BRAIN_VAULT:-}"
+if [[ -z "$vault" && -f "$env_file" ]]; then
+	vault="$(sed -n 's/^BRAIN_VAULT=//p' "$env_file" | tail -n 1)"
+	vault="${vault%\"}"
+	vault="${vault#\"}"
+	vault="${vault%\'}"
+	vault="${vault#\'}"
+fi
+if [[ -z "$vault" ]]; then
+	echo "brain: BRAIN_VAULT is not set (run setup.sh in the vault)" >&2
+	exit 0
+fi
+if [[ ! -d "$vault" || ! -f "$vault/.claude/scripts/$script" ]]; then
+	echo "brain: vault not found at $vault (check ~/.config/second-brain/.env)" >&2
+	exit 0
+fi
+
+project="${CLAUDE_PROJECT_DIR:-$PWD}"
+real_vault="$(readlink -f "$vault")"
+real_project="$(readlink -f "$project" 2>/dev/null || echo "$project")"
+case "$real_project/" in
+	"$real_vault"/*) exit 0 ;;
+esac
+
+BRAIN_HOOK=1 BRAIN_VAULT="$vault" node --disable-warning=ExperimentalWarning --experimental-strip-types \
+	"$vault/.claude/scripts/$script" || true
+exit 0

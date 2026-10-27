@@ -1,0 +1,25 @@
+name: Template Guard
+
+# Runs only in the public template repo. A private brain made from it deletes
+# the .template-repo marker, so none of its own commits are checked.
+on:
+  push:
+  pull_request:
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        if: hashFiles('.template-repo') != ''
+        with:
+          node-version: 22
+      - name: Check changed paths against .template-paths
+        if: hashFiles('.template-repo') != ''
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node --experimental-strip-types .github/scripts/template-guard.ts "$BASE_SHA" "$HEAD_SHA"

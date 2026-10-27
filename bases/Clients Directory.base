@@ -1,0 +1,32 @@
+filters:
+  and:
+    - file.inFolder("clients")
+    - file.ext == "md"
+    - 'file.name != "Clients"'
+properties:
+  file.name:
+    displayName: Name
+  company:
+    displayName: Company
+  title:
+    displayName: Role
+  description:
+    displayName: Context
+views:
+  - type: table
+    name: By Company
+    groupBy:
+      property: company
+      direction: ASC
+    order:
+      - file.name
+      - title
+      - company
+      - description
+  - type: table
+    name: All Clients
+    order:
+      - file.name
+      - title
+      - company
+      - description

@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/breferrari/shardmind/main/schemas/shard.schema.json
+
+apiVersion: v1
+name: obsidian-mind
+namespace: breferrari
+version: 10.0.0
+description: "AI-augmented Obsidian vault for multi-agent knowledge work"
+persona: "Web developers, designers, freelancers — anyone using Claude Code, Codex, or Gemini CLI as a thinking partner"
+license: MIT
+homepage: https://github.com/breferrari/obsidian-mind
+
+requires:
+  obsidian: ">=1.12.0"
+  # `--experimental-strip-types` + ESM; required by `.claude/scripts/*.ts`
+  # which are executed natively by Node without a build step.
+  node: ">=22.6.0"
+  # 0.1.3 introduced the split hook lifecycle and the `requires.shardmind`
+  # check. 0.1.7 fixes `update` overwriting user-edited files while reporting
+  # them kept (shardmind#150), and this shard's updates rewrite settings.json
+  # hook lines, so older engines must refuse with SHARDMIND_VERSION_MISMATCH.
+  # 0.2.1 fixes a failed or cancelled `adopt` in a clone of this repo deleting
+  # the clone's own `.shardmind/` files (shardmind#326); `/om-vault-upgrade`
+  # runs adopt on exactly such clones.
+  shardmind: ">=0.2.1"
+
+hooks:
+  bootstrap:
+    script: .shardmind/hooks/bootstrap.ts
+    # Bump whenever an update must RE-RUN bootstrap on existing installs —
+    # index schema changes, one-time store migrations, new setup-time gates.
+    # The engine re-runs bootstrap on update whenever this fingerprint
+    # differs from the recorded one.
+    # v2 (v7.0.0): collection name derives from qmd_index with an in-place
+    # legacy-name migration, plus the qmd_min_version gate — upgrading
+    # installs must re-run bootstrap for the migration to execute.
+    # v3 (#137): qmd_index ships empty and the index name is derived from the
+    # vault folder, so two vaults on one machine stop sharing a store. An
+    # updating vault's index name changes, which means a new (empty) SQLite
+    # store — bootstrap must re-run to build it, or search returns nothing.
+    fingerprint: "qmd-v3"
+  personalize: .shardmind/hooks/personalize.ts
+  post-update: .shardmind/hooks/post-update.ts
+  # 60 s to accommodate first-run qmd bootstrap (index creation + initial embed pass).
+  timeout_ms: 60000

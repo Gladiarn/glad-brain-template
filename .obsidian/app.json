@@ -1,0 +1,14 @@
+{
+  "userIgnoreFilters": [
+    "ARCHITECTURE.md",
+    "README.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    ".claude/",
+    ".scripts/",
+    ".claude-plugin/",
+    ".codex/",
+    ".gemini/",
+    ".shardmind/"
+  ]
+}

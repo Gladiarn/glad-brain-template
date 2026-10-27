@@ -1,0 +1,72 @@
+# Obsidian (runtime state, not vault config)
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+.obsidian/plugins/*/data.json
+.obsidian/graph.json
+
+# Community plugins that ship platform executables write them under their
+# plugin dir — without this, a multi-hundred-KB binary lands in git history
+# on the next commit.
+.obsidian/plugins/*/binaries/
+
+# OS
+.DS_Store
+.Trash/
+
+# Claude Code. The re-include guard protects against user-level global
+# gitignores that exclude .claude/ (a cache-dir convention in other tools) —
+# without it, the entire hook/command/skill layer silently drops out of
+# version control. Repo-level patterns override global excludes.
+!.claude/
+.claude/settings.local.json
+
+# QMD index (local, regenerated)
+.qmd/
+
+# ShardMind runtime hook output (local, regenerated)
+.shardmind/logs/
+
+# Session logs (local transcripts)
+thinking/session-logs/
+
+# Node typecheck deps (CI + local dev only; runtime is zero-deps)
+node_modules/
+.claude/scripts/node_modules/
+
+# The Claude Code mod: the session context it delivers (rewritten every
+# session, read through /memory), and the typings and tsconfig Claude Code
+# writes into a mod folder when it is loaded for development.
+.claude/session-context.md
+.claude/skills/obsidian-mind/.claude-plugin/types/
+.claude/skills/obsidian-mind/tsconfig.json
+
+# Hook runtime state (local, self-pruning / debounce sentinel)
+.claude/scripts/.hint-state.json
+.claude/scripts/.checklist-state.json
+.claude/scripts/.stop-handoff/
+.claude/scripts/.qmd-refresh-sentinel
+.claude/scripts/.qmd-refresh-sentinel.pending
+
+# MCP server audit log — every vault read, with the calling repo and the query
+# text. Local forensics, never history: it churns on every session, and the
+# query strings are the user's own thinking.
+.claude/om-mcp-audit.jsonl
+.claude/om-mcp-audit.jsonl.1
+
+# `reason` transcripts. A spawned session's conclusion is INFERRED, so it is
+# kept for provenance and cost review but never committed as vault knowledge —
+# the calling session decides whether any of it is worth a memory.
+.claude/om-reasoning/
+
+# The empty MCP config `reason` spawns against — the recursion guard. Runtime
+# plumbing, created when absent. The glob also covers the `.tmp` sibling it is
+# created through, which a crash between write and claim can leave behind.
+.claude/om-mcp-no-mcp.json*
+
+# The brain's machine-local state: the save log, the save lock, per-project
+# last-save markers. Never committed.
+.brain/
+
+# graphify: the extraction cache is local and can be rebuilt. graph.json and
+# GRAPH_REPORT.md stay tracked so the second PC never rebuilds the graph.
+graphify-out/cache/

@@ -1,6 +1,7 @@
 # Second Brain — Design
 
 Date: 2026-10-27
+
 Status: Approved by owner 2026-10-27
 
 ## Intent

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# brain: run the second-brain CLI from wherever it is installed.
+# The vault is found from this file's own location, following symlinks, so
+# `bin/` can be on PATH through a link.
+set -euo pipefail
+self="$(readlink -f "${BASH_SOURCE[0]}")"
+vault="$(cd "$(dirname "$self")/.." && pwd)"
+exec node --disable-warning=ExperimentalWarning --experimental-strip-types \
+	"$vault/.claude/scripts/brain.ts" "$@"

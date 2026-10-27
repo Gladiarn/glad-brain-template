@@ -1,0 +1,108 @@
+#!/usr/bin/env node
+/**
+ * UserPromptSubmit hook — classify user messages and inject routing hints.
+ *
+ * Reads the hook JSON payload from stdin, inspects the `prompt` field for
+ * signal patterns (see lib/signals.ts), and emits a hookSpecificOutput
+ * envelope on stdout with one hint per matched signal. Also hands the agent
+ * the previous turn's Stop report when one is waiting (lib/stop-handoff.ts).
+ * Exits 0 silently on malformed input, or when there is neither a hint nor a
+ * waiting report.
+ */
+
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { debug, readStdinJson, writeHookOutput } from "./lib/hook-io.ts";
+import { classify } from "./lib/matcher.ts";
+import { claimUnseen } from "./lib/hint-state.ts";
+import { envPath } from "./lib/env-path.ts";
+import { HANDOFF_DIR, takeHandoff } from "./lib/stop-handoff.ts";
+import { takeReinject } from "./lib/reinject.ts";
+import { saveContext } from "./lib/brain/save-trigger.ts";
+import { sessionProjectDir } from "./lib/brain/session.ts";
+import { resolveVaultRoot } from "./lib/brain/vault.ts";
+
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+// CLASSIFY_HINT_STATE routes the state file into a tmp path for tests
+// (mirrors the QMD_REFRESH_SENTINEL pattern). Production never sets it.
+const STATE_PATH = envPath(process.env, "CLASSIFY_HINT_STATE", join(SCRIPT_DIR, ".hint-state.json"));
+
+type HookInput = {
+	readonly prompt?: unknown;
+	readonly hook_event_name?: unknown;
+	readonly session_id?: unknown;
+};
+
+const input = await readStdinJson<HookInput>();
+if (!input) {
+	debug("classify: null input (bad/empty stdin)");
+	process.exit(0);
+}
+
+// The `save` trigger (lib/brain/save-trigger.ts). Checked on every message,
+// never deduped: each `save` must reach the agent. Launched by bin/brain-hook
+// from a code repo, it is the only thing this hook does.
+const saveText =
+	typeof input.prompt === "string"
+		? saveContext(input.prompt, resolveVaultRoot(import.meta.url), sessionProjectDir(process.env, process.cwd()))
+		: null;
+if (process.env["BRAIN_HOOK"] === "1") {
+	if (saveText !== null) {
+		writeHookOutput(
+			typeof input.hook_event_name === "string" ? input.hook_event_name : "UserPromptSubmit",
+			saveText,
+		);
+	}
+	process.exit(0);
+}
+
+// The previous turn's Stop report, if one is waiting (lib/stop-handoff.ts).
+// Taken before anything about the prompt is checked: it rides with this
+// prompt whatever the prompt holds.
+const sessionId = typeof input.session_id === "string" && input.session_id ? input.session_id : null;
+const stopReport = sessionId !== null ? takeHandoff(HANDOFF_DIR, sessionId) : null;
+
+const prompt = input.prompt;
+const usable = typeof prompt === "string" && prompt !== "";
+if (!usable) debug(`classify: no usable prompt (type=${typeof prompt})`);
+const signals = usable ? classify(prompt) : [];
+debug(`classify: matched ${signals.length} signal(s)`);
+
+// Once-per-session dedupe (#107): each hint fires once per session_id via
+// a self-pruning state file (7-day age + 200-session cap). Missing/invalid
+// session_id fails OPEN — every hint emits, matching today's behavior.
+let toEmit = signals;
+if (sessionId !== null && signals.length > 0) {
+	toEmit = claimUnseen(STATE_PATH, sessionId, signals);
+	debug(
+		`classify: ${signals.length - toEmit.length} signal(s) already fired this session`,
+	);
+}
+
+const parts: string[] = [];
+if (saveText !== null) parts.push(saveText);
+if (toEmit.length > 0) {
+	const hints = toEmit.map((s) => `- ${s}`).join("\n");
+	parts.push(
+		"Content classification hints (act on these if the user's message contains relevant info):\n" +
+			hints +
+			"\n\nRemember: use proper templates, add [[wikilinks]], follow AGENTS.md conventions.",
+	);
+}
+if (stopReport !== null) parts.push(stopReport);
+// After a Gemini compression, the session context once (#357). Last: if the
+// output cap cuts anything, it cuts the end of the context, not the hints
+// claimUnseen has already marked as fired.
+const reinjected = sessionId !== null ? takeReinject(HANDOFF_DIR, sessionId) : null;
+if (reinjected !== null) parts.push(reinjected);
+
+if (parts.length > 0) {
+	const eventName =
+		typeof input.hook_event_name === "string"
+			? input.hook_event_name
+			: "UserPromptSubmit";
+
+	writeHookOutput(eventName, parts.join("\n\n"));
+}
+
+process.exit(0);
