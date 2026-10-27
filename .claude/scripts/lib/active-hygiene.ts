@@ -335,8 +335,9 @@ export function isMonolithExempt(filename: string): boolean {
 
 // Never walked for oversize: machinery (shared with the SessionStart
 // listing, so the two can't drift — see MACHINERY_DIRS) plus `templates/`,
-// whose files are scaffold rather than notes.
-const OVERSIZE_SKIP_DIRS = new Set([...MACHINERY_DIRS, "templates"]);
+// whose files are scaffold rather than notes, and `docs/`, the template's
+// own documentation (infrastructure in vault-manifest.json).
+const OVERSIZE_SKIP_DIRS = new Set([...MACHINERY_DIRS, "templates", "docs"]);
 
 // Recursively collect .md files under a directory, returning paths relative
 // to `root`. Tolerates a missing directory (returns []). Shared by every
@@ -357,8 +358,13 @@ export function walkMarkdown(root: string, relDir: string): string[] {
 	return out;
 }
 
+// A note inside an active/<Topic>/ cluster counts only when the whole cluster
+// is done: a finished session log in a live project is history, not drift.
+// tidy-fix refuses mixed clusters by the same rule, so the flag never asks
+// for a move the fixer would refuse.
 function findCompletedInActive(root: string): string[] {
-	const found: string[] = [];
+	const done: string[] = [];
+	const liveClusters = new Set<string>();
 	for (const rel of walkMarkdown(root, ACTIVE_REL)) {
 		let content: string;
 		try {
@@ -367,11 +373,19 @@ function findCompletedInActive(root: string): string[] {
 			continue;
 		}
 		const status = extractFrontmatterField(content, "status");
-		if (status && ARCHIVABLE_STATUS.has(status.toLowerCase())) {
-			found.push(rel);
+		if (status && ARCHIVABLE_STATUS.has(status.toLowerCase())) done.push(rel);
+		else {
+			const cluster = clusterOf(rel);
+			if (cluster !== null) liveClusters.add(cluster);
 		}
 	}
-	return found.sort();
+	return done.filter((rel) => !liveClusters.has(clusterOf(rel) ?? "")).sort();
+}
+
+function clusterOf(rel: string): string | null {
+	const inside = rel.slice(`${ACTIVE_REL}/`.length);
+	const slash = inside.indexOf("/");
+	return slash === -1 ? null : inside.slice(0, slash);
 }
 
 function findUngroupedClusters(root: string): TopicCluster[] {

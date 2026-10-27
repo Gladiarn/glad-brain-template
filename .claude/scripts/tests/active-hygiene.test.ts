@@ -158,6 +158,18 @@ describe("scanActiveHygiene — detectors", () => {
 		]);
 	});
 
+	test("a done session inside a project that is still active is not flagged", () => {
+		mkdirSync(join(ROOT, "work/active/Live Cluster/sessions"), { recursive: true });
+		writeAged("work/active/Live Cluster/next.md", "---\nstatus: active\n---\n# plan\n", 1);
+		writeAged(
+			"work/active/Live Cluster/sessions/2026-07-12.md",
+			"---\nstatus: completed\n---\n# session\n",
+			1,
+		);
+		const report = scanActiveHygiene(ROOT, NOW, DEFAULTS);
+		assert.ok(!report.completedInActive.some((p) => p.startsWith("work/active/Live Cluster/")));
+	});
+
 	test("clusters loose root notes sharing a distinctive token; DF guard rejects common words", () => {
 		for (const f of [
 			"Payments Migration.md",
@@ -186,6 +198,13 @@ describe("scanActiveHygiene — detectors", () => {
 		assert.ok(paths.includes("work/Fat Log.md"));
 		assert.ok(!paths.some((p) => p.includes("Archive")));
 		assert.ok(!paths.some((p) => p.startsWith("templates/")));
+	});
+
+	test("docs/ is repo documentation, not notes, so it is never oversized", () => {
+		mkdirSync(join(ROOT, "docs/plans"), { recursive: true });
+		writeAged("docs/plans/Big Plan.md", "x".repeat(60_000), 1);
+		const report = scanActiveHygiene(ROOT, NOW, DEFAULTS);
+		assert.ok(!report.oversizedNotes.some((o) => o.path.startsWith("docs/")));
 	});
 
 	test("open loops: quiet notes with live signals flagged; 1:1 dirs reduce to latest per person", () => {

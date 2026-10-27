@@ -112,7 +112,8 @@ describe("tidy-fix", () => {
 		assert.match(stdout, /Would fix:/);
 		assert.match(stdout, /Done Solo\.md → work\/archive\/2025\/Done Solo\.md/);
 		assert.match(stdout, /Full Topic\/ → work\/archive\/2024\/Full Topic\/ \(whole cluster\)/);
-		assert.match(stdout, /Mixed Topic\/ — mixed cluster/);
+		// A live cluster holding a done note is not drift: no flag, no refusal.
+		assert.doesNotMatch(stdout, /Mixed Topic/);
 		assert.match(stdout, /Split Years\/ — completed notes span years \(2023, 2024\)/);
 		assert.match(stdout, /stray-note\.md → brain\/stray-note\.md/);
 		assert.match(stdout, /memory\/Collide\.md — brain\/Collide\.md already exists/);
@@ -163,7 +164,8 @@ describe("tidy-fix", () => {
 		assert.doesNotMatch(stdout, /Done Solo/);
 		assert.doesNotMatch(stdout, /stray-note/);
 		// The judgment findings are still surfaced.
-		assert.match(stdout, /Mixed Topic\/ — mixed cluster/);
+		// A live cluster holding a done note is not drift: no flag, no refusal.
+		assert.doesNotMatch(stdout, /Mixed Topic/);
 		assert.match(stdout, /Refused \(judgment — run \/om-tidy\)/);
 	});
 });
