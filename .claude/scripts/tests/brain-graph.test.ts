@@ -165,14 +165,33 @@ describe("graphCommand", { skip: WSL_ONLY }, () => {
 			env: baseEnv({ GEMINI_API_KEY: KEY, ANTHROPIC_API_KEY: "sk-ant-FAKEFAKEFAKEFAKEFAKE", GOOGLE_API_KEY: "other" }),
 		});
 		assert.equal(r.ran, true, r.message);
-		assert.deepEqual(log(), [`extract ${vault} --backend gemini --model gemini-test-model`]);
+		assert.deepEqual(log(), [`extract ${vault} --backend gemini --model gemini-test-model --api-timeout 60`]);
 		assert.deepEqual(envLog(), ["BACKEND=gemini GEMINI=set ANTHROPIC= OPENAI= GOOGLE="]);
 		assert.ok(!r.message.includes(KEY));
 	});
 
 	test("the default model comes from the config defaults", () => {
 		graphCommand({ vaultRoot: vault, notes: true, yes: true, env: baseEnv({ GEMINI_API_KEY: KEY }) });
-		assert.match(log()[0] ?? "", /--model gemini-3\.8-flash$/);
+		assert.match(log()[0] ?? "", /--model gemini-3\.8-flash --api-timeout 60$/);
+	});
+
+	test("a notes run that hangs is stopped and reported, not left waiting for hours", () => {
+		const hanging = makeBin({ graphify: { extra: "sleep 30" } });
+		try {
+			const started = Date.now();
+			const r = graphCommand({
+				vaultRoot: vault,
+				notes: true,
+				yes: true,
+				env: { ...baseEnv({ GEMINI_API_KEY: KEY }), PATH: `${hanging}:/usr/bin:/bin`, BRAIN_GRAPH_NOTES_TIMEOUT_MS: "1500" },
+			});
+			assert.ok(Date.now() - started < 15_000, "the run was not stopped");
+			assert.match(r.message, /did not finish|timed out|stopped/i);
+			assert.match(r.message, /Gemini/);
+			assert.ok(!r.message.includes(KEY));
+		} finally {
+			rmTemp(hanging);
+		}
 	});
 
 	test("a detached run returns at once, starts graphify, and logs to .brain/graph.log", async () => {
@@ -180,7 +199,7 @@ describe("graphCommand", { skip: WSL_ONLY }, () => {
 		assert.equal(r.ran, true, r.message);
 		assert.match(r.message, /background/i);
 		for (let i = 0; i < 100 && log().length === 0; i++) await new Promise((res) => setTimeout(res, 50));
-		assert.deepEqual(log(), [`extract ${vault} --backend gemini --model gemini-3.8-flash`]);
+		assert.deepEqual(log(), [`extract ${vault} --backend gemini --model gemini-3.8-flash --api-timeout 60`]);
 		assert.ok(existsSync(join(vault, ".brain", "graph.log")));
 	});
 });
@@ -349,7 +368,7 @@ describe("graph after a save", { skip: WSL_ONLY }, () => {
 		const r = run({ GEMINI_API_KEY: KEY, BRAIN_GEMINI_FAKE: fixtures() });
 		assert.equal(r.code, 0, r.stdout + r.stderr);
 		for (let i = 0; i < 100 && lines(join(bin, "graphify.log")).length === 0; i++) await new Promise((res) => setTimeout(res, 50));
-		assert.deepEqual(lines(join(bin, "graphify.log")), [`extract ${vault} --backend gemini --model gemini-3.8-flash`]);
+		assert.deepEqual(lines(join(bin, "graphify.log")), [`extract ${vault} --backend gemini --model gemini-3.8-flash --api-timeout 60`]);
 	});
 
 	test("a fallback save never starts the graph", async () => {

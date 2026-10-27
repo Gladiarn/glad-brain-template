@@ -41,6 +41,16 @@ export type GraphOptions = {
 
 const PROVIDER_ENV = /^(ANTHROPIC_|CLAUDE_CODE_|OPENAI_|AZURE_OPENAI_|MOONSHOT_|DEEPSEEK_|OLLAMA_|AWS_)/;
 const LONG_RUN_MS = 6 * 60 * 60_000;
+// A Gemini that stops answering (high demand, an outage) otherwise holds a
+// notes run for hours: graphify waits 600 s per request by default. Each
+// request gets 60 s and the whole run 20 minutes, then the run is stopped.
+const NOTES_API_TIMEOUT_S = 60;
+const NOTES_RUN_MS = 20 * 60_000;
+
+function notesRunMs(env: NodeJS.ProcessEnv): number {
+	const n = Number(env["BRAIN_GRAPH_NOTES_TIMEOUT_MS"]);
+	return Number.isFinite(n) && n > 0 ? n : NOTES_RUN_MS;
+}
 
 /** The env graphify gets: one explicit backend, and no key for any other provider. */
 export function graphifyEnv(base: NodeJS.ProcessEnv, backend: "none" | "gemini"): NodeJS.ProcessEnv {
@@ -81,13 +91,17 @@ function runGraphify(
 	const bin = findOnPath("graphify", base);
 	if (bin === null) return { ran: false, message: NOT_INSTALLED };
 	const env = graphifyEnv(base, backend);
+	const limitMs = backend === "gemini" ? notesRunMs(base) : LONG_RUN_MS;
 
 	if (opts.detached === true) {
 		try {
 			const dir = join(opts.vaultRoot, ".brain");
 			mkdirSync(dir, { recursive: true });
 			const out = openSync(join(dir, "graph.log"), "a");
-			const child = spawn(bin, args, { cwd: opts.vaultRoot, env, detached: true, stdio: ["ignore", out, out], windowsHide: true });
+			// In the background nobody waits on the run, so `timeout` ends a hung one.
+			const killer = backend === "gemini" ? findOnPath("timeout", base) : null;
+			const [cmd, argv] = killer === null ? [bin, args] : [killer, [`${Math.ceil(limitMs / 1000)}s`, bin, ...args]];
+			const child = spawn(cmd, argv, { cwd: opts.vaultRoot, env, detached: true, stdio: ["ignore", out, out], windowsHide: true });
 			child.on("error", () => {});
 			child.unref();
 			closeSync(out);
@@ -101,10 +115,14 @@ function runGraphify(
 		cwd: opts.vaultRoot,
 		env,
 		encoding: "utf8",
-		timeout: LONG_RUN_MS,
+		timeout: limitMs,
 		windowsHide: true,
 		stdio: opts.inherit === true ? "inherit" : "pipe",
 	});
+	if ((r.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT" && backend === "gemini") {
+		const mins = Math.max(1, Math.round(limitMs / 60_000));
+		return { ran: false, message: `${what} was stopped after ${mins} min: Gemini did not answer in time (often high demand). The graph was not updated; try again later.` };
+	}
 	if (r.error) return { ran: false, message: `${what} did not finish (${(r.error as NodeJS.ErrnoException).code ?? "error"})` };
 	if (r.status !== 0) return { ran: false, message: `${what} exited ${r.status}` };
 	return { ran: true, message: `${what} done` };
@@ -180,7 +198,7 @@ export function graphCommand(opts: GraphOptions): GraphResult {
 	}
 	return runGraphify(
 		opts,
-		["extract", opts.vaultRoot, "--backend", "gemini", "--model", config.geminiModel],
+		["extract", opts.vaultRoot, "--backend", "gemini", "--model", config.geminiModel, "--api-timeout", String(NOTES_API_TIMEOUT_S)],
 		"gemini",
 		"notes graph update through Gemini",
 	);
