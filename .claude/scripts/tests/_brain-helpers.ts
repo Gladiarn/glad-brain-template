@@ -104,6 +104,8 @@ export function runBrain(
 				PATH: opts.binDir,
 				BRAIN_VAULT: opts.vault,
 				GEMINI_API_KEY: "",
+				// Never this PC's real key, even when a test file runs on its own.
+				BRAIN_ENV_FILE: join(tmpdir(), "brain-test-no-env-file"),
 				...opts.env,
 			},
 		},

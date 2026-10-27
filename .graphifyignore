@@ -1,5 +1,23 @@
+# The notes graph covers the owner's notes only: work/, clients/, portfolio/,
+# brain/ and reference/. Everything below is tooling or template docs.
 .obsidian/
 graphify-out/cache/
 .brain/
 bases/
 templates/
+.claude/
+.codex/
+.gemini/
+.github/
+.scripts/
+.claude-plugin/
+docs/
+bin/
+README.md
+CHANGELOG.md
+CONTRIBUTING.md
+ARCHITECTURE.md
+AGENTS.md
+NOTICE.md
+Home.md
+brain/Skills.md

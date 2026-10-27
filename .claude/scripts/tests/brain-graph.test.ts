@@ -9,7 +9,7 @@ import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { graphCommand, viewGraph } from "../lib/brain/graph.ts";
+import { changedNotes, graphCommand, viewGraph } from "../lib/brain/graph.ts";
 import { rmTemp } from "./_helpers.ts";
 import { REPO_ROOT, makeBin, makeVault, runBrain, tempDir, WSL_ONLY } from "./_brain-helpers.ts";
 
@@ -40,6 +40,26 @@ describe("repo files for the graph", { skip: WSL_ONLY }, () => {
 		assert.ok(ignore.includes(".brain/"));
 		assert.ok(!ignore.some((l) => /^graphify-out\/(graph\.json|GRAPH_REPORT\.md)$/.test(l)), "graph.json or the report is ignored");
 		assert.ok(!ignore.includes("graphify-out/") && !ignore.includes("graphify-out"));
+	});
+});
+
+describe("what the notes graph covers", { skip: WSL_ONLY }, () => {
+	const notes = changedNotes(REPO_ROOT);
+
+	test("the owner's notes are in it", () => {
+		assert.ok(notes.includes("work/active/general/next.md"), notes.join("\n"));
+		assert.ok(notes.includes("brain/Gotchas.md"));
+		assert.ok(notes.includes("clients/Clients.md"));
+	});
+
+	test("the template's own docs and tooling are not", () => {
+		const tooling = notes.filter(
+			(n) =>
+				/^(\.claude|\.codex|\.gemini|\.github|\.scripts|\.claude-plugin|docs|bin)\//.test(n) ||
+				/(^|\/)(README|CHANGELOG|CONTRIBUTING|ARCHITECTURE|AGENTS|NOTICE|Home)\.md$/.test(n) ||
+				n === "brain/Skills.md",
+		);
+		assert.deepEqual(tooling, []);
 	});
 });
 
