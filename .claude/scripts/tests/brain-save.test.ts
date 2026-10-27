@@ -90,7 +90,7 @@ type Step =
 
 function fakeGemini(steps: Step[]) {
 	const calls: { url: string; headers: Record<string, string>; body: string }[] = [];
-	const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+	const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
 		const headers: Record<string, string> = {};
 		new Headers(init?.headers).forEach((v, k) => (headers[k] = v));
 		calls.push({ url: String(input), headers, body: String(init?.body ?? "") });
@@ -98,7 +98,7 @@ function fakeGemini(steps: Step[]) {
 		if (step === undefined) throw new Error("the fake Gemini ran out of scripted responses");
 		if ("throws" in step) throw step.throws;
 		if ("hang" in step) {
-			await new Promise((_, reject) => {
+			return await new Promise<never>((_, reject) => {
 				init?.signal?.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
 			});
 		}
