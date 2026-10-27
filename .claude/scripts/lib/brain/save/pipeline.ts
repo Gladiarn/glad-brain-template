@@ -13,13 +13,13 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, unlinkSync } from "n
 import { dirname, join, sep } from "node:path";
 import { writeFileAtomic } from "../../atomic-write.ts";
 import { loadConfig } from "../config.ts";
-import { callGemini, GeminiError, selectFetch } from "./gemini.ts";
+import { callGemini, GeminiError, selectFetch, UNAVAILABLE_KINDS } from "./gemini.ts";
 import { appendSaveLog, redactKey } from "./log.ts";
 import { checkPrompt, fixPrompt, writePrompt, type FileView, type ProposedFile } from "./prompts.ts";
 import { checkProposed } from "./sanity.ts";
 import { allowedTargets, type SaveSummary } from "./schema.ts";
 
-export type SaveResult = { outcome: "saved" | "fallback"; reason?: string; files: string[] };
+export type SaveResult = { outcome: "saved" | "fallback"; reason?: string; files: string[]; model?: string };
 
 export type SaveHooks = {
 	/** Commit and push the vault after a save. A warning or a throw is reported, never fatal. */
@@ -127,6 +127,10 @@ export async function runSave(opts: RunSaveOptions): Promise<SaveResult> {
 	const targets = new Set(targetList);
 	const today = now.toISOString().slice(0, 10);
 	const tally = { promptTokens: 0, outputTokens: 0, rounds: 0 };
+	const chain = [...new Set([config.geminiModel, ...config.geminiFallbackModels])];
+	let current = 0;
+	const modelsTried: string[] = [];
+	let proposalModel: string | null = null;
 
 	const finish = (outcome: SaveResult["outcome"], reason: string | undefined, files: string[]): SaveResult => {
 		const safeReason = reason === undefined ? undefined : redactKey(reason, apiKey);
@@ -135,33 +139,56 @@ export async function runSave(opts: RunSaveOptions): Promise<SaveResult> {
 			{
 				ts: now.toISOString(),
 				project: summary.project,
-				model: config.geminiModel,
+				model: outcome === "saved" && proposalModel !== null ? proposalModel : chain[current]!,
+				modelsTried,
 				...tally,
 				outcome,
 				...(safeReason === undefined ? {} : { reason: safeReason }),
 			},
 			apiKey,
 		);
-		return safeReason === undefined ? { outcome, files } : { outcome, reason: safeReason, files };
+		const used = outcome === "saved" ? { model: proposalModel ?? chain[current]! } : {};
+		return safeReason === undefined ? { outcome, files, ...used } : { outcome, reason: safeReason, files, ...used };
 	};
 	const fallback = (reason: string) => finish("fallback", reason, targetList);
 
 	if (apiKey === "") return fallback("no Gemini key");
 	const fetchImpl = opts.fetchImpl ?? selectFetch(env);
 
+	// One call, on the current model. A model that is unavailable (quota, outage,
+	// a stray 404) is dropped for the rest of this save and the call goes to the
+	// next one; any other failure ends the save here.
 	const ask = async (prompt: { system: string; user: string }) => {
-		const r = await callGemini({
-			model: config.geminiModel,
-			apiKey,
-			system: prompt.system,
-			user: prompt.user,
-			fetchImpl,
-			...(opts.timeoutMs === undefined ? {} : { timeoutMs: opts.timeoutMs }),
-		});
-		tally.promptTokens += r.promptTokens;
-		tally.outputTokens += r.outputTokens;
+		for (;;) {
+			const model = chain[current]!;
+			if (!modelsTried.includes(model)) modelsTried.push(model);
+			try {
+				const r = await callGemini({
+					model,
+					apiKey,
+					system: prompt.system,
+					user: prompt.user,
+					fetchImpl,
+					...(opts.timeoutMs === undefined ? {} : { timeoutMs: opts.timeoutMs }),
+				});
+				tally.promptTokens += r.promptTokens;
+				tally.outputTokens += r.outputTokens;
+				return { json: r.json, model };
+			} catch (e) {
+				if (!(e instanceof GeminiError) || !UNAVAILABLE_KINDS.has(e.kind)) throw e;
+				if (current + 1 >= chain.length) {
+					throw new Refused(`all Gemini models were unavailable (${modelsTried.join(", ")}); last error: ${e.message}`);
+				}
+				current++;
+			}
+		}
+	};
+	const askProposal = async (prompt: { system: string; user: string }) => {
+		const r = await ask(prompt);
+		proposalModel = r.model;
 		return r.json;
 	};
+	const askCheck = async (prompt: { system: string; user: string }) => (await ask(prompt)).json;
 
 	try {
 		const views: FileView[] = targetList.map((path) => {
@@ -179,20 +206,20 @@ export async function runSave(opts: RunSaveOptions): Promise<SaveResult> {
 			return files;
 		};
 
-		let proposal = accept(await ask(writePrompt(summary, targetList, views, today)));
+		let proposal = accept(await askProposal(writePrompt(summary, targetList, views, today)));
 
 		const checks = Math.max(1, config.maxFixRounds);
 		let lastProblems: string[] = [];
 		let passed = false;
 		for (let round = 1; round <= checks; round++) {
 			tally.rounds = round;
-			const verdict = validateCheck(await ask(checkPrompt(summary, oldFiles, proposal, today)));
+			const verdict = validateCheck(await askCheck(checkPrompt(summary, oldFiles, proposal, today)));
 			if (verdict.ok) {
 				passed = true;
 				break;
 			}
 			lastProblems = verdict.problems;
-			if (round < checks) proposal = accept(await ask(fixPrompt(summary, targetList, views, proposal, verdict.problems, today)));
+			if (round < checks) proposal = accept(await askProposal(fixPrompt(summary, targetList, views, proposal, verdict.problems, today)));
 		}
 		if (!passed) return fallback(`Gemini failed its own check ${checks} times: ${lastProblems.join("; ").slice(0, 200)}`);
 

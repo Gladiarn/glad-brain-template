@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.1.0 — 2026-10-27
+
+### Added
+- add a Gemini model chain for saves: `geminiFallbackModels` lists the models a save moves to, in order, when the current one is rate limited, overloaded, unreachable or answers 404, before Claude takes over
+- add `graphAfterSave`, which starts the notes graph in the background after a Gemini save
+- build `graph.html` and the report after `brain graph`, by running `graphify cluster-only` and `graphify export html` with no LLM after the extract
+- record `modelsTried` in the save log
+
+### Changed
+- change the default model to `gemini-3.5-flash-lite`, with `gemini-3.1-flash-lite` and `gemini-3.8-flash` as fallbacks, because the free tier allows far more requests per day on the lite models
+- stop starting the notes graph automatically after a save; set `graphAfterSave` to `true` to get it back
+
+### Fixed
+- document that a broken IPv6 route on WSL makes Gemini and npm requests hang or return empty 404s, and how to prefer IPv4; `setup.sh` suggests the fix when it detects the problem
+
 ## v1.0.0 — 2026-10-27
 
 ### Added

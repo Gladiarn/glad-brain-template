@@ -19,6 +19,11 @@
  * stopped. `graphify update <path>` is the code-only pass, and
  * GRAPHIFY_BACKEND=none also turns off the `claude -p` community-labelling
  * fallback the extract path would otherwise be free to use.
+ *
+ * `extract` writes graph.json but no graph.html or report, so after it (and
+ * after `update`, when graph.html is still missing) two more steps run with
+ * the backend off and no key: `graphify cluster-only <vault>` then
+ * `graphify export html`. If the first step fails, they do not run.
  */
 
 import { spawn, spawnSync } from "node:child_process";
@@ -80,7 +85,26 @@ export function findOnPath(name: string, env: NodeJS.ProcessEnv = process.env): 
 const NOT_INSTALLED =
 	"graphify is not installed; skipped the graph (run setup.sh, or `uv tool install 'graphifyy[gemini]'`)";
 
-/** Run graphify with `args`, waiting for it, or starting it in the background. */
+const GRAPH_HTML_PATH = ["graphify-out", "graph.html"];
+
+// The background run is one shell sequence so it can chain the steps and still
+// put `timeout` on the Gemini step alone. The follow-up steps run with the
+// backend off and the key removed. Arguments: graphify, vault, timeout binary
+// (or empty), seconds, "always" or "if-missing", then the first step's args.
+const BACKGROUND_SCRIPT = [
+	'g=$1; v=$2; k=$3; s=$4; f=$5; shift 5',
+	'if [ -n "$k" ]; then "$k" "${s}s" "$g" "$@"; else "$g" "$@"; fi || exit $?',
+	'if [ "$f" = if-missing ] && [ -f "$v/graphify-out/graph.html" ]; then exit 0; fi',
+	'unset GEMINI_API_KEY',
+	'GRAPHIFY_BACKEND=none "$g" cluster-only "$v" || exit $?',
+	'GRAPHIFY_BACKEND=none "$g" export html',
+].join("\n");
+
+/**
+ * Run graphify with `args`, waiting for it, or starting it in the background,
+ * then build graph.html: always after a notes run, and after a code-only run
+ * only when graph.html is missing.
+ */
 function runGraphify(
 	opts: GraphOptions,
 	args: string[],
@@ -92,6 +116,8 @@ function runGraphify(
 	if (bin === null) return { ran: false, message: NOT_INSTALLED };
 	const env = graphifyEnv(base, backend);
 	const limitMs = backend === "gemini" ? notesRunMs(base) : LONG_RUN_MS;
+	const htmlFile = join(opts.vaultRoot, ...GRAPH_HTML_PATH);
+	const always = backend === "gemini";
 
 	if (opts.detached === true) {
 		try {
@@ -100,8 +126,8 @@ function runGraphify(
 			const out = openSync(join(dir, "graph.log"), "a");
 			// In the background nobody waits on the run, so `timeout` ends a hung one.
 			const killer = backend === "gemini" ? findOnPath("timeout", base) : null;
-			const [cmd, argv] = killer === null ? [bin, args] : [killer, [`${Math.ceil(limitMs / 1000)}s`, bin, ...args]];
-			const child = spawn(cmd, argv, { cwd: opts.vaultRoot, env, detached: true, stdio: ["ignore", out, out], windowsHide: true });
+			const argv = ["-c", BACKGROUND_SCRIPT, "sh", bin, opts.vaultRoot, killer ?? "", String(Math.ceil(limitMs / 1000)), always ? "always" : "if-missing", ...args];
+			const child = spawn("/bin/sh", argv, { cwd: opts.vaultRoot, env, detached: true, stdio: ["ignore", out, out], windowsHide: true });
 			child.on("error", () => {});
 			child.unref();
 			closeSync(out);
@@ -125,6 +151,26 @@ function runGraphify(
 	}
 	if (r.error) return { ran: false, message: `${what} did not finish (${(r.error as NodeJS.ErrnoException).code ?? "error"})` };
 	if (r.status !== 0) return { ran: false, message: `${what} exited ${r.status}` };
+
+	if (!always && existsSync(htmlFile)) return { ran: true, message: `${what} done` };
+	const offEnv = graphifyEnv(base, "none");
+	for (const [step, stepArgs] of [
+		["cluster-only", ["cluster-only", opts.vaultRoot]],
+		["export html", ["export", "html"]],
+	] as const) {
+		const s = spawnSync(bin, [...stepArgs], {
+			cwd: opts.vaultRoot,
+			env: offEnv,
+			encoding: "utf8",
+			timeout: LONG_RUN_MS,
+			windowsHide: true,
+			stdio: opts.inherit === true ? "inherit" : "pipe",
+		});
+		const failed = s.error ? ((s.error as NodeJS.ErrnoException).code ?? "error") : s.status !== 0 ? `exited ${s.status}` : null;
+		if (failed !== null) {
+			return { ran: false, message: `${what} done, but ${step} ${failed.startsWith("exited") ? failed : `did not finish (${failed})`}, so graph.html was not updated` };
+		}
+	}
 	return { ran: true, message: `${what} done` };
 }
 
@@ -151,11 +197,12 @@ function ignorer(vaultRoot: string): (rel: string) => boolean {
 }
 
 /** The notes graphify would send: Markdown not ignored, changed since the last graph build. */
-export function changedNotes(vaultRoot: string): string[] {
+/** With `all`, every note graphify would read, whether or not it changed. */
+export function changedNotes(vaultRoot: string, opts: { all?: boolean } = {}): string[] {
 	const ignored = ignorer(vaultRoot);
 	let since = 0;
 	try {
-		since = statSync(join(vaultRoot, "graphify-out", "graph.json")).mtimeMs;
+		if (opts.all !== true) since = statSync(join(vaultRoot, "graphify-out", "graph.json")).mtimeMs;
 	} catch {
 		/* never built: every note counts */
 	}
@@ -204,8 +251,6 @@ export function graphCommand(opts: GraphOptions): GraphResult {
 	);
 }
 
-const GRAPH_HTML = ["graphify-out", "graph.html"];
-
 /**
  * Open the graph in the Windows browser from WSL: wslview, then explorer.exe
  * with the Windows path, then xdg-open. explorer.exe exits 1 when it works,
@@ -213,7 +258,7 @@ const GRAPH_HTML = ["graphify-out", "graph.html"];
  */
 export function viewGraph(opts: { vaultRoot: string; env?: NodeJS.ProcessEnv }): { opened: boolean; message: string } {
 	const env = opts.env ?? process.env;
-	const file = join(opts.vaultRoot, ...GRAPH_HTML);
+	const file = join(opts.vaultRoot, ...GRAPH_HTML_PATH);
 	if (!existsSync(file)) return { opened: false, message: "no graph yet: run brain graph first" };
 
 	const run = (name: string, args: string[]) => {

@@ -22,7 +22,7 @@ import { hardWrappedParagraphs } from "../lib/prose-width.ts";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const SKIP = new Set([".git", ".obsidian", ".claude", ".codex", ".gemini", ".github", ".shardmind", "node_modules"]);
-const SKIP_PATHS = new Set(["thinking/session-logs"]);
+const SKIP_PATHS = new Set(["thinking/session-logs", "graphify-out"]);
 
 function notes(): string[] {
 	const out: string[] = [];

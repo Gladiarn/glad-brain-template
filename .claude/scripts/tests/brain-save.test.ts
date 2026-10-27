@@ -112,6 +112,39 @@ function fakeGemini(steps: Step[]) {
 	return { fetchImpl, calls };
 }
 
+/** Like fakeGemini, but each model has its own script, picked by the model name in the URL. */
+function fakeGeminiByModel(byModel: Record<string, Step[]>) {
+	const calls: { model: string; url: string; headers: Record<string, string>; body: string }[] = [];
+	const used: Record<string, number> = {};
+	const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+		const url = String(input);
+		const model = /\/models\/([^:]+):generateContent/.exec(url)?.[1] ?? "?";
+		const headers: Record<string, string> = {};
+		new Headers(init?.headers).forEach((v, k) => (headers[k] = v));
+		calls.push({ model, url, headers, body: String(init?.body ?? "") });
+		const n = (used[model] = (used[model] ?? 0) + 1);
+		const step = byModel[model]?.[n - 1];
+		if (step === undefined) throw new Error(`the fake Gemini has no scripted response ${n} for ${model}`);
+		if ("throws" in step) throw step.throws;
+		if ("hang" in step) {
+			return await new Promise<never>((_, reject) => {
+				init?.signal?.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+			});
+		}
+		if ("status" in step) return new Response(step.body ?? "{}", { status: step.status });
+		const payload = {
+			candidates: [{ content: { parts: [{ text: JSON.stringify(step.json) }] } }],
+			usageMetadata: { promptTokenCount: step.prompt ?? 100, candidatesTokenCount: step.output ?? 50 },
+		};
+		return new Response(JSON.stringify(payload), { status: 200 });
+	}) as typeof fetch;
+	return { fetchImpl, calls };
+}
+
+const M1 = "gemini-3.5-flash-lite";
+const M2 = "gemini-3.1-flash-lite";
+const M3 = "gemini-3.8-flash";
+
 const write = (files: { path: string; content: string }[]) => ({ json: { files } });
 const OK = { json: { ok: true, problems: [] } };
 const BAD = (...problems: string[]) => ({ json: { ok: false, problems } });
@@ -328,7 +361,8 @@ describe("runSave", { skip: WSL_ONLY }, () => {
 			{
 				ts: NOW.toISOString(),
 				project: "site",
-				model: "gemini-3.8-flash",
+				model: M1,
+				modelsTried: [M1],
 				promptTokens: 200,
 				outputTokens: 100,
 				rounds: 1,
@@ -449,7 +483,8 @@ describe("runSave", { skip: WSL_ONLY }, () => {
 		];
 		for (const [name, step, re] of cases) {
 			const before = snapshot();
-			const { fetchImpl } = fakeGemini([step]);
+			// The same failure on every model in the chain, so the last error is the one reported.
+			const { fetchImpl } = fakeGemini([step, step, step]);
 			const r = await runSave({ vaultRoot: vault, summary: SUMMARY, fetchImpl, now: NOW, env, hooks: {}, timeoutMs: 60 });
 			assert.equal(r.outcome, "fallback", name);
 			assert.match(r.reason ?? "", re, name);
@@ -459,10 +494,130 @@ describe("runSave", { skip: WSL_ONLY }, () => {
 
 	test("a rate limit in the middle (the check) still falls back with nothing written", async () => {
 		const before = snapshot();
-		const { fetchImpl } = fakeGemini([write(goodFiles()), { status: 429 }]);
+		const { fetchImpl } = fakeGemini([write(goodFiles()), { status: 429 }, { status: 429 }, { status: 429 }]);
 		const r = await runSave({ vaultRoot: vault, summary: SUMMARY, fetchImpl, now: NOW, env, hooks: {} });
 		assert.equal(r.outcome, "fallback");
 		assert.equal(snapshot(), before);
+	});
+
+	test("a rate-limited first model hands the save to the next model in the chain", async () => {
+		const { fetchImpl, calls } = fakeGeminiByModel({ [M1]: [{ status: 429 }], [M2]: [write(goodFiles()), OK] });
+		const r = await runSave({ vaultRoot: vault, summary: SUMMARY, fetchImpl, now: NOW, env, hooks: {} });
+		assert.equal(r.outcome, "saved");
+		assert.equal(r.model, M2);
+		assert.deepEqual(calls.map((c) => c.model), [M1, M2, M2]);
+		assert.equal(read("work/active/site/next.md"), NEXT_NEW);
+		const line = logLines().at(-1)!;
+		assert.equal(line["model"], M2);
+		assert.deepEqual(line["modelsTried"], [M1, M2]);
+		assert.equal(line["outcome"], "saved");
+	});
+
+	test("a 404 with an empty body moves on to the next model", async () => {
+		const { fetchImpl, calls } = fakeGeminiByModel({ [M1]: [{ status: 404, body: "" }], [M2]: [write(goodFiles()), OK] });
+		const r = await runSave({ vaultRoot: vault, summary: SUMMARY, fetchImpl, now: NOW, env, hooks: {} });
+		assert.equal(r.outcome, "saved");
+		assert.deepEqual(calls.map((c) => c.model), [M1, M2, M2]);
+	});
+
+	test("a server error, a network error and a timeout each move on to the next model", async () => {
+		const cases: Step[] = [{ status: 503 }, { status: 500 }, { throws: new TypeError("fetch failed") }, { hang: true }];
+		for (const step of cases) {
+			const { fetchImpl, calls } = fakeGeminiByModel({ [M1]: [step], [M2]: [write(goodFiles()), OK] });
+			const r = await runSave({ vaultRoot: vault, summary: SUMMARY, fetchImpl, now: NOW, env, hooks: {}, timeoutMs: 60 });
+			assert.equal(r.outcome, "saved", JSON.stringify(step));
+			assert.deepEqual(calls.map((c) => c.model), [M1, M2, M2]);
+			assert.equal(read("work/active/site/next.md"), NEXT_NEW);
+			// reset for the next case
+			put("work/active/site/next.md", NEXT_OLD);
+			put("work/active/site/tasks.md", TASKS_OLD);
+		}
+	});
+
+	test("a model that fails mid-save is replaced for the rest of it, and the failed call is retried", async () => {
+		const { fetchImpl, calls } = fakeGeminiByModel({ [M1]: [write(goodFiles()), { status: 503 }], [M2]: [OK] });
+		const r = await runSave({ vaultRoot: vault, summary: SUMMARY, fetchImpl, now: NOW, env, hooks: {} });
+		assert.equal(r.outcome, "saved");
+		assert.deepEqual(calls.map((c) => c.model), [M1, M1, M2]);
+		const line = logLines().at(-1)!;
+		assert.equal(line["model"], M1, "model is the one that produced the accepted proposal");
+		assert.deepEqual(line["modelsTried"], [M1, M2]);
+	});
+
+	test("when every model in the chain is unavailable the save falls back, nothing written", async () => {
+		const before = snapshot();
+		const { fetchImpl, calls } = fakeGeminiByModel({ [M1]: [{ status: 429 }], [M2]: [{ status: 404, body: "" }], [M3]: [{ status: 503 }] });
+		const r = await runSave({ vaultRoot: vault, summary: SUMMARY, fetchImpl, now: NOW, env, hooks: {} });
+		assert.equal(r.outcome, "fallback");
+		assert.match(r.reason ?? "", /all Gemini models were unavailable/i);
+		assert.deepEqual(calls.map((c) => c.model), [M1, M2, M3]);
+		assert.equal(snapshot(), before);
+		assert.deepEqual(logLines().at(-1)!["modelsTried"], [M1, M2, M3]);
+		assert.equal(logLines().at(-1)!["outcome"], "fallback");
+		assert.deepEqual(r.files.sort(), allowedTargets(vault, "site", NOW).sort());
+	});
+
+	test("a self-check that fails twice on the first model falls back without switching models", async () => {
+		const before = snapshot();
+		const { fetchImpl, calls } = fakeGeminiByModel({ [M1]: [write(goodFiles()), BAD("lost a list"), write(goodFiles()), BAD("still lost")] });
+		const r = await runSave({ vaultRoot: vault, summary: SUMMARY, fetchImpl, now: NOW, env, hooks: {} });
+		assert.equal(r.outcome, "fallback");
+		assert.match(r.reason ?? "", /check/i);
+		assert.ok(calls.every((c) => c.model === M1));
+		assert.equal(calls.length, 4);
+		assert.equal(snapshot(), before);
+		assert.deepEqual(logLines().at(-1)!["modelsTried"], [M1]);
+	});
+
+	test("a sanity-check refusal falls back without trying another model", async () => {
+		const shrunk = { path: "brain/Gotchas.md", content: "---\ndate: x\n---\n\n# Gotchas\n" };
+		const { fetchImpl, calls } = fakeGeminiByModel({ [M1]: [write([...goodFiles(), shrunk])] });
+		const r = await runSave({ vaultRoot: vault, summary: SUMMARY, fetchImpl, now: NOW, env, hooks: {} });
+		assert.equal(r.outcome, "fallback");
+		assert.equal(calls.length, 1);
+	});
+
+	test("a 400, 401 or 403 rejection falls back at once without trying further models", async () => {
+		for (const status of [400, 401, 403]) {
+			const before = snapshot();
+			const { fetchImpl, calls } = fakeGeminiByModel({ [M1]: [{ status, body: '{"error":"no"}' }] });
+			const r = await runSave({ vaultRoot: vault, summary: SUMMARY, fetchImpl, now: NOW, env, hooks: {} });
+			assert.equal(r.outcome, "fallback", String(status));
+			assert.match(r.reason ?? "", new RegExp(String(status)));
+			assert.doesNotMatch(r.reason ?? "", /all Gemini models/i);
+			assert.equal(calls.length, 1, String(status));
+			assert.equal(snapshot(), before);
+		}
+	});
+
+	test("the chain is geminiModel then the fallbacks, without repeats", async () => {
+		writeFileSync(join(vault, "brain.config.json"), JSON.stringify({ geminiModel: "m1", geminiFallbackModels: ["m1", "m2", "m2"] }));
+		const { fetchImpl, calls } = fakeGeminiByModel({ m1: [{ status: 429 }], m2: [{ status: 429 }] });
+		const r = await runSave({ vaultRoot: vault, summary: SUMMARY, fetchImpl, now: NOW, env, hooks: {} });
+		assert.equal(r.outcome, "fallback");
+		assert.deepEqual(calls.map((c) => c.model), ["m1", "m2"]);
+		assert.deepEqual(logLines().at(-1)!["modelsTried"], ["m1", "m2"]);
+	});
+
+	test("with no fallback models a failing model goes straight to the Claude fallback", async () => {
+		writeFileSync(join(vault, "brain.config.json"), JSON.stringify({ geminiFallbackModels: [] }));
+		const { fetchImpl, calls } = fakeGeminiByModel({ [M1]: [{ status: 429 }] });
+		const r = await runSave({ vaultRoot: vault, summary: SUMMARY, fetchImpl, now: NOW, env, hooks: {} });
+		assert.equal(r.outcome, "fallback");
+		assert.equal(calls.length, 1);
+	});
+
+	test("the key stays out of the log and the result when every model fails", async () => {
+		const body = `{"error":"bad key ${KEY}"}`;
+		const { fetchImpl } = fakeGeminiByModel({
+			[M1]: [{ status: 429, body }],
+			[M2]: [{ status: 404, body }],
+			[M3]: [{ throws: new Error(`socket closed for key ${KEY}`) }],
+		});
+		const r = await runSave({ vaultRoot: vault, summary: SUMMARY, fetchImpl, now: NOW, env, hooks: {} });
+		assert.equal(r.outcome, "fallback");
+		assert.ok(!JSON.stringify(r).includes(KEY));
+		assert.ok(!read(".brain/save-log.jsonl").includes(KEY));
 	});
 
 	test("a missing key falls back with the reason `no Gemini key`, without calling the network", async () => {

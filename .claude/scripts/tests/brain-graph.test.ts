@@ -44,7 +44,7 @@ describe("repo files for the graph", { skip: WSL_ONLY }, () => {
 });
 
 describe("what the notes graph covers", { skip: WSL_ONLY }, () => {
-	const notes = changedNotes(REPO_ROOT);
+	const notes = changedNotes(REPO_ROOT, { all: true });
 
 	test("the owner's notes are in it", () => {
 		assert.ok(notes.includes("work/active/general/next.md"), notes.join("\n"));
@@ -89,9 +89,18 @@ describe("graphCommand", { skip: WSL_ONLY }, () => {
 			env: baseEnv({ GEMINI_API_KEY: KEY, ANTHROPIC_API_KEY: "sk-ant-FAKEFAKEFAKEFAKEFAKE", OPENAI_API_KEY: "sk-FAKEFAKEFAKEFAKEFAKEFAKE" }),
 		});
 		assert.equal(r.ran, true, r.message);
-		assert.deepEqual(log(), [`update ${vault}`]);
+		// graphify update leaves no graph.html here, so the two no-LLM steps follow.
+		assert.deepEqual(log(), [`update ${vault}`, `cluster-only ${vault}`, "export html"]);
 		assert.ok(!log().join(" ").includes("--model"));
-		assert.deepEqual(envLog(), ["BACKEND=none GEMINI= ANTHROPIC= OPENAI= GOOGLE="]);
+		assert.deepEqual(envLog(), Array(3).fill("BACKEND=none GEMINI= ANTHROPIC= OPENAI= GOOGLE="));
+	});
+
+	test("the code-only update does not rebuild graph.html when it is already there", () => {
+		mkdirSync(join(vault, "graphify-out"));
+		writeFileSync(join(vault, "graphify-out", "graph.html"), "<html></html>");
+		const r = graphCommand({ vaultRoot: vault, notes: false, yes: false, env: baseEnv() });
+		assert.equal(r.ran, true, r.message);
+		assert.deepEqual(log(), [`update ${vault}`]);
 	});
 
 	test("without graphify installed it says so and runs nothing", () => {
@@ -165,14 +174,43 @@ describe("graphCommand", { skip: WSL_ONLY }, () => {
 			env: baseEnv({ GEMINI_API_KEY: KEY, ANTHROPIC_API_KEY: "sk-ant-FAKEFAKEFAKEFAKEFAKE", GOOGLE_API_KEY: "other" }),
 		});
 		assert.equal(r.ran, true, r.message);
-		assert.deepEqual(log(), [`extract ${vault} --backend gemini --model gemini-test-model --api-timeout 60`]);
-		assert.deepEqual(envLog(), ["BACKEND=gemini GEMINI=set ANTHROPIC= OPENAI= GOOGLE="]);
+		// graphify extract writes graph.json only, so graph.html comes from two steps with no LLM.
+		assert.deepEqual(log(), [`extract ${vault} --backend gemini --model gemini-test-model --api-timeout 60`, `cluster-only ${vault}`, "export html"]);
+		assert.deepEqual(envLog(), [
+			"BACKEND=gemini GEMINI=set ANTHROPIC= OPENAI= GOOGLE=",
+			"BACKEND=none GEMINI= ANTHROPIC= OPENAI= GOOGLE=",
+			"BACKEND=none GEMINI= ANTHROPIC= OPENAI= GOOGLE=",
+		]);
 		assert.ok(!r.message.includes(KEY));
+	});
+
+	test("a failed extract stops there: no cluster-only, no export", () => {
+		const failing = makeBin({ graphify: { extra: 'case "$1" in extract) exit 3;; esac' } });
+		try {
+			const r = graphCommand({ vaultRoot: vault, notes: true, yes: true, env: { PATH: failing, GEMINI_API_KEY: KEY } });
+			assert.equal(r.ran, false);
+			assert.match(r.message, /exited 3/);
+			assert.deepEqual(lines(join(failing, "graphify.log")), [`extract ${vault} --backend gemini --model gemini-3.5-flash-lite --api-timeout 60`]);
+		} finally {
+			rmTemp(failing);
+		}
+	});
+
+	test("a failed cluster-only is reported and the export does not run", () => {
+		const failing = makeBin({ graphify: { extra: 'case "$1" in cluster-only) exit 4;; esac' } });
+		try {
+			const r = graphCommand({ vaultRoot: vault, notes: true, yes: true, env: { PATH: failing, GEMINI_API_KEY: KEY } });
+			assert.equal(r.ran, false);
+			assert.match(r.message, /cluster-only exited 4/);
+			assert.deepEqual(lines(join(failing, "graphify.log")).map((l) => l.split(" ")[0]), ["extract", "cluster-only"]);
+		} finally {
+			rmTemp(failing);
+		}
 	});
 
 	test("the default model comes from the config defaults", () => {
 		graphCommand({ vaultRoot: vault, notes: true, yes: true, env: baseEnv({ GEMINI_API_KEY: KEY }) });
-		assert.match(log()[0] ?? "", /--model gemini-3\.8-flash --api-timeout 60$/);
+		assert.match(log()[0] ?? "", /--model gemini-3\.5-flash-lite --api-timeout 60$/);
 	});
 
 	test("a notes run that hangs is stopped and reported, not left waiting for hours", () => {
@@ -198,9 +236,27 @@ describe("graphCommand", { skip: WSL_ONLY }, () => {
 		const r = graphCommand({ vaultRoot: vault, notes: true, yes: true, detached: true, env: baseEnv({ GEMINI_API_KEY: KEY }) });
 		assert.equal(r.ran, true, r.message);
 		assert.match(r.message, /background/i);
-		for (let i = 0; i < 100 && log().length === 0; i++) await new Promise((res) => setTimeout(res, 50));
-		assert.deepEqual(log(), [`extract ${vault} --backend gemini --model gemini-3.8-flash --api-timeout 60`]);
+		for (let i = 0; i < 100 && log().length < 3; i++) await new Promise((res) => setTimeout(res, 50));
+		assert.deepEqual(log(), [`extract ${vault} --backend gemini --model gemini-3.5-flash-lite --api-timeout 60`, `cluster-only ${vault}`, "export html"]);
+		assert.deepEqual(envLog(), [
+			"BACKEND=gemini GEMINI=set ANTHROPIC= OPENAI= GOOGLE=",
+			"BACKEND=none GEMINI= ANTHROPIC= OPENAI= GOOGLE=",
+			"BACKEND=none GEMINI= ANTHROPIC= OPENAI= GOOGLE=",
+		]);
 		assert.ok(existsSync(join(vault, ".brain", "graph.log")));
+	});
+
+	test("a detached run whose extract fails does not go on to cluster-only or export", async () => {
+		const failing = makeBin({ graphify: { extra: 'case "$1" in extract) exit 3;; esac' } });
+		try {
+			const r = graphCommand({ vaultRoot: vault, notes: true, yes: true, detached: true, env: { PATH: failing, GEMINI_API_KEY: KEY } });
+			assert.equal(r.ran, true, r.message);
+			for (let i = 0; i < 100 && lines(join(failing, "graphify.log")).length === 0; i++) await new Promise((res) => setTimeout(res, 50));
+			await new Promise((res) => setTimeout(res, 300));
+			assert.deepEqual(lines(join(failing, "graphify.log")), [`extract ${vault} --backend gemini --model gemini-3.5-flash-lite --api-timeout 60`]);
+		} finally {
+			rmTemp(failing);
+		}
 	});
 });
 
@@ -298,7 +354,7 @@ describe("brain graph and brain view on the command line", { skip: WSL_ONLY }, (
 	test("brain graph runs the code-only update", () => {
 		const r = runBrain(["graph"], { vault, cwd: vault, binDir: bin });
 		assert.equal(r.code, 0, r.stderr);
-		assert.deepEqual(lines(join(bin, "graphify.log")), [`update ${vault}`]);
+		assert.deepEqual(lines(join(bin, "graphify.log")), [`update ${vault}`, `cluster-only ${vault}`, "export html"]);
 	});
 
 	test("brain graph --notes asks first, with the count", () => {
@@ -364,14 +420,24 @@ describe("graph after a save", { skip: WSL_ONLY }, () => {
 		rmTemp(scratch);
 	});
 
-	test("a Gemini save with the key set starts the notes graph in the background", async () => {
+	test("by default a Gemini save does not start any graph", async () => {
 		const r = run({ GEMINI_API_KEY: KEY, BRAIN_GEMINI_FAKE: fixtures() });
 		assert.equal(r.code, 0, r.stdout + r.stderr);
-		for (let i = 0; i < 100 && lines(join(bin, "graphify.log")).length === 0; i++) await new Promise((res) => setTimeout(res, 50));
-		assert.deepEqual(lines(join(bin, "graphify.log")), [`extract ${vault} --backend gemini --model gemini-3.8-flash --api-timeout 60`]);
+		await new Promise((res) => setTimeout(res, 400));
+		assert.deepEqual(lines(join(bin, "graphify.log")), []);
+		assert.doesNotMatch(r.stdout, /graph/i);
 	});
 
-	test("a fallback save never starts the graph", async () => {
+	test("with graphAfterSave on, a Gemini save starts the notes graph in the background", async () => {
+		writeFileSync(join(vault, "brain.config.json"), JSON.stringify({ graphAfterSave: true }));
+		const r = run({ GEMINI_API_KEY: KEY, BRAIN_GEMINI_FAKE: fixtures() });
+		assert.equal(r.code, 0, r.stdout + r.stderr);
+		for (let i = 0; i < 100 && lines(join(bin, "graphify.log")).length < 3; i++) await new Promise((res) => setTimeout(res, 50));
+		assert.deepEqual(lines(join(bin, "graphify.log")), [`extract ${vault} --backend gemini --model gemini-3.5-flash-lite --api-timeout 60`, `cluster-only ${vault}`, "export html"]);
+	});
+
+	test("a fallback save never starts the graph, even with graphAfterSave on", async () => {
+		writeFileSync(join(vault, "brain.config.json"), JSON.stringify({ graphAfterSave: true }));
 		const r = run({ GEMINI_API_KEY: "" });
 		assert.equal(r.code, 3);
 		await new Promise((res) => setTimeout(res, 300));
@@ -379,6 +445,7 @@ describe("graph after a save", { skip: WSL_ONLY }, () => {
 	});
 
 	test("a graph that cannot start is a note, never a failed save", () => {
+		writeFileSync(join(vault, "brain.config.json"), JSON.stringify({ graphAfterSave: true }));
 		const bare = makeBin();
 		try {
 			const summary = join(scratch, "s.json");

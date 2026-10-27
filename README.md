@@ -13,7 +13,7 @@ Glad Brain is an Obsidian vault with hooks and a small CLI. When you start Claud
 | Per-project plans | Each project has a `next.md`, kept current by overwriting it rather than adding to it. It loads at session start in that project's repo, and other projects stay out of context. |
 | Save trigger | `save` files the session, `save: <text>` files a single item, and `wrap up` runs a full review. Detection is done by a hook, so phrases like "add a save button" don't trigger it. |
 | Checked saves | Gemini merges the session summary into the notes, reviews its own output, and corrects it. A script then checks the result. A save that fails a check writes nothing. |
-| Claude fallback | If Gemini is unavailable, rate-limited or fails its check, a Claude Sonnet subagent performs the save and reports that it did. |
+| Claude fallback | If every Gemini model in the chain is unavailable or rate-limited, or the result fails its check, a Claude Sonnet subagent performs the save and reports that it did. |
 | Multi-PC sync | Sessions pull on start, and saves commit and push. Conflicts are reported, never overwritten. |
 | Knowledge graph | graphify builds a free, code-only graph of each linked repo and a graph of your notes through Gemini. |
 | Semantic search | QMD searches your notes by meaning, locally, with no API calls. |
@@ -167,7 +167,9 @@ These settings live in `brain.config.json`:
 
 | Key | Default | Purpose |
 |---|---|---|
-| `geminiModel` | `gemini-3.8-flash` | The Gemini model used for saves |
+| `geminiModel` | `gemini-3.5-flash-lite` | The first Gemini model a save tries. The notes graph uses it too |
+| `geminiFallbackModels` | `["gemini-3.1-flash-lite", "gemini-3.8-flash"]` | Models a save moves to, in order, when the current one is rate limited, overloaded or unreachable |
+| `graphAfterSave` | `false` | Set to `true` to start the notes graph in the background after each Gemini save |
 | `fallbackModel` | `sonnet` | The Claude model used when Gemini cannot save |
 | `qmdEnabled` | `true` | Set to `false` to use plain text search on low-memory machines |
 | `maxFixRounds` | `2` | The number of self-check rounds per save |
@@ -176,7 +178,7 @@ These settings live in `brain.config.json`:
 ## Costs and privacy
 
 - **Claude:** code graphs are built without an LLM. Saves use Gemini first, and Claude only as the fallback. graphify is never allowed to fall back to Claude.
-- **Gemini free tier:** a save takes 2 to 4 requests. Once the daily limit is reached, saves fall back to Claude. On the free tier, Google may use the content you send to improve its products. Use a paid key or no key if that is a concern.
+- **Gemini free tier:** a save takes 2 to 4 requests. The daily limit differs per model (the lite models allow far more than `gemini-3.8-flash`), so a save moves down the model chain when a model is rate limited or unavailable, and falls back to Claude only when every model in the chain has failed. On the free tier, Google may use the content you send to improve its products. Use a paid key or no key if that is a concern.
 - **Your notes and key:** notes are stored in your private repository. The API key stays in `~/.config/second-brain/.env`.
 
 Each save is logged to `.brain/save-log.jsonl` with the model used, token counts and outcome.
@@ -211,6 +213,7 @@ This merges template changes into your brain. Your notes are not affected, becau
 | The plan does not load in a repo | Run `brain status` in the repo. If it is not linked, run `brain link`. |
 | "pull stopped by a conflict" | Two PCs edited the same note. Resolve the conflict in the vault with git, then run `brain sync`. |
 | Saves always run through Claude | Run `brain status` to check the key, and check your quota at [AI Studio](https://aistudio.google.com/rate-limit). |
+| Gemini or npm requests hang or return empty 404s on WSL | WSL's IPv6 route can be broken. Prefer IPv4 with `echo 'precedence ::ffff:0:0/96  100' \| sudo tee -a /etc/gai.conf`. |
 | WSL runs out of memory | Set `"qmdEnabled": false`, or raise `memory=` in `%UserProfile%\.wslconfig`. |
 
 The full guide is in [docs/brain-setup.md](docs/brain-setup.md).

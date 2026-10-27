@@ -11,7 +11,12 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 export type BrainConfig = {
+	/** The first model a save tries; the notes graph uses it too. */
 	geminiModel: string;
+	/** Tried in order when the model before it is unavailable (quota, outage). */
+	geminiFallbackModels: string[];
+	/** Start the notes graph in the background after a Gemini save. */
+	graphAfterSave: boolean;
 	fallbackModel: "sonnet";
 	qmdEnabled: boolean;
 	maxFixRounds: number;
@@ -21,7 +26,9 @@ export type BrainConfig = {
 export const CONFIG_FILE = "brain.config.json";
 
 export const DEFAULT_CONFIG: Readonly<BrainConfig> = {
-	geminiModel: "gemini-3.8-flash",
+	geminiModel: "gemini-3.5-flash-lite",
+	geminiFallbackModels: ["gemini-3.1-flash-lite", "gemini-3.8-flash"],
+	graphAfterSave: false,
 	fallbackModel: "sonnet",
 	qmdEnabled: true,
 	maxFixRounds: 2,
@@ -29,7 +36,7 @@ export const DEFAULT_CONFIG: Readonly<BrainConfig> = {
 };
 
 export function loadConfig(vaultRoot: string): BrainConfig {
-	const config: BrainConfig = { ...DEFAULT_CONFIG };
+	const config: BrainConfig = { ...DEFAULT_CONFIG, geminiFallbackModels: [...DEFAULT_CONFIG.geminiFallbackModels] };
 	let raw: unknown;
 	try {
 		raw = JSON.parse(readFileSync(join(vaultRoot, CONFIG_FILE), "utf8"));
@@ -41,6 +48,11 @@ export function loadConfig(vaultRoot: string): BrainConfig {
 	if (typeof o["geminiModel"] === "string" && o["geminiModel"].trim() !== "") {
 		config.geminiModel = o["geminiModel"].trim();
 	}
+	const fallbacks = o["geminiFallbackModels"];
+	if (Array.isArray(fallbacks) && fallbacks.every((m) => typeof m === "string" && m.trim() !== "")) {
+		config.geminiFallbackModels = (fallbacks as string[]).map((m) => m.trim());
+	}
+	if (typeof o["graphAfterSave"] === "boolean") config.graphAfterSave = o["graphAfterSave"];
 	if (typeof o["qmdEnabled"] === "boolean") config.qmdEnabled = o["qmdEnabled"];
 	const rounds = o["maxFixRounds"];
 	if (typeof rounds === "number" && Number.isInteger(rounds) && rounds >= 0 && rounds <= 10) {

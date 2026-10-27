@@ -160,14 +160,17 @@ async function cmdSave(args: string[], vaultRoot: string): Promise<number> {
 		return 4;
 	}
 	if (result.outcome === "saved") {
-		console.log(`saved via Gemini (${loadConfig(vaultRoot).geminiModel})`);
+		console.log(`saved via Gemini (${result.model ?? loadConfig(vaultRoot).geminiModel})`);
 		console.log("files:");
 		for (const f of result.files) console.log(`- ${f}`);
 		if (result.reason !== undefined) console.log(`warning: ${result.reason}`);
-		// The notes graph, in the background and only through Gemini. Whatever
-		// happens to it is a line here, never a failed save.
-		const graph = graphCommand({ vaultRoot, notes: true, yes: true, detached: true });
-		console.log(`graph: ${graph.message}`);
+		// The notes graph is off by default; with graphAfterSave it starts in the
+		// background and only through Gemini. Whatever happens to it is a line
+		// here, never a failed save.
+		if (loadConfig(vaultRoot).graphAfterSave) {
+			const graph = graphCommand({ vaultRoot, notes: true, yes: true, detached: true });
+			console.log(`graph: ${graph.message}`);
+		}
 		return 0;
 	}
 	console.log(`fallback: ${result.reason ?? "Gemini could not save"}`);

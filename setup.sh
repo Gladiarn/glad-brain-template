@@ -212,3 +212,12 @@ memory= under [wsl2] in %UserProfile%\\.wslconfig (for example memory=8GB) and
 run 'wsl --shutdown' from Windows, or turn it off with "qmdEnabled": false in
 brain.config.json.
 MSG
+
+# WSL's IPv6 route can be broken, which makes Gemini and npm requests hang or
+# answer with empty 404s. Suggest IPv4 first only when IPv6 is listed first.
+if command -v getent >/dev/null 2>&1; then
+  first_addr="$(getent ahosts generativelanguage.googleapis.com 2>/dev/null | awk 'NR==1 {print $1}')"
+  case "$first_addr" in
+    *:*) echo "If Gemini or npm requests hang or return empty 404s, prefer IPv4: echo 'precedence ::ffff:0:0/96  100' | sudo tee -a /etc/gai.conf" ;;
+  esac
+fi

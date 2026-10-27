@@ -9,7 +9,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-export type GeminiErrorKind = "rate-limit" | "server" | "timeout" | "network" | "rejected" | "bad-response";
+export type GeminiErrorKind = "rate-limit" | "server" | "timeout" | "network" | "not-found" | "rejected" | "bad-response";
 
 export class GeminiError extends Error {
 	readonly kind: GeminiErrorKind;
@@ -21,6 +21,9 @@ export class GeminiError extends Error {
 }
 
 export type GeminiResult = { json: unknown; promptTokens: number; outputTokens: number };
+
+/** Errors that say this model is unavailable right now, so another model may still answer. */
+export const UNAVAILABLE_KINDS: ReadonlySet<GeminiErrorKind> = new Set<GeminiErrorKind>(["rate-limit", "server", "timeout", "network", "not-found"]);
 
 export const DEFAULT_TIMEOUT_MS = 20_000;
 const ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models";
@@ -58,6 +61,8 @@ export async function callGemini(opts: {
 	}
 
 	if (response.status === 429) throw new GeminiError("rate-limit", "Gemini rate limit (HTTP 429)");
+	// Gemini sometimes answers 404 with an empty body for a model that is fine a minute later, so it is not a rejection.
+	if (response.status === 404) throw new GeminiError("not-found", "Gemini did not find the model (HTTP 404)");
 	if (response.status >= 500) throw new GeminiError("server", `Gemini server error (HTTP ${response.status})`);
 	if (!response.ok) throw new GeminiError("rejected", `Gemini rejected the request (HTTP ${response.status})`);
 

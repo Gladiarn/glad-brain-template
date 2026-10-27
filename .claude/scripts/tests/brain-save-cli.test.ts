@@ -103,10 +103,10 @@ describe("brain save", { skip: WSL_ONLY }, () => {
 	});
 
 	test("a Gemini rate limit is a fallback, exit 3", () => {
-		const dir = fixtures([{ status: 429 }]);
+		const dir = fixtures([{ status: 429 }, { status: 429 }, { status: 429 }]);
 		const r = save(["--summary", summaryFile(SUMMARY)], { GEMINI_API_KEY: KEY, BRAIN_GEMINI_FAKE: dir });
 		assert.equal(r.code, 3);
-		assert.match(r.stdout, /429|rate limit/i);
+		assert.match(r.stdout, /all Gemini models were unavailable.*(429|rate limit)/i);
 		assert.ok(!r.stdout.includes(KEY) && !r.stderr.includes(KEY));
 	});
 

@@ -1,5 +1,7 @@
 {
-	"geminiModel": "gemini-3.8-flash",
+	"geminiModel": "gemini-3.5-flash-lite",
+	"geminiFallbackModels": ["gemini-3.1-flash-lite", "gemini-3.8-flash"],
+	"graphAfterSave": false,
 	"fallbackModel": "sonnet",
 	"qmdEnabled": true,
 	"maxFixRounds": 2,

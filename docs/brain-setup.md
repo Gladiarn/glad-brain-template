@@ -29,8 +29,10 @@ Run `brain link` in the repo, once. It adds one entry to `projects.map.json` in 
 
 - Say `save` and Claude writes a short summary of the session. `brain save` has Gemini merge it into the vault notes, check its own work, and pass a plain-script sanity check. Only the current project's folder, its line in the work index, the brain lessons and the linked client note can change.
 - Say `save: <text>` to file one item. Say `wrap up` for the full end-of-session review.
-- If Gemini is down, rate limited, has no key, or fails its check, nothing is written and Claude files the same summary through a Sonnet subagent, then runs `brain save --commit-only`. It tells you which way it went.
-- Every save is committed and pushed. Two sessions saving at once wait on a lock for up to 30 seconds, then report `save busy`. Every save is logged in `.brain/save-log.jsonl` with the model, token counts and outcome.
+- A save tries `geminiModel` first (default `gemini-3.5-flash-lite`). If that model is rate limited, overloaded, unreachable or answers 404, the save moves to the next model in `geminiFallbackModels` for its remaining calls and retries the failed call. A rejected request (400, 401, 403), a failed self-check or a failed sanity check goes straight to Claude without trying another model.
+- The notes graph is not started after a save. Set `"graphAfterSave": true` in `brain.config.json` to start it in the background, or run `brain graph --notes --yes` when you want it.
+- If every Gemini model is unavailable, there is no key, or the result fails its check, nothing is written and Claude files the same summary through a Sonnet subagent, then runs `brain save --commit-only`. It tells you which way it went.
+- Every save is committed and pushed. Two sessions saving at once wait on a lock for up to 30 seconds, then report `save busy`. Every save is logged in `.brain/save-log.jsonl` with the model that produced the saved result, every model tried (`modelsTried`), token counts and outcome.
 - A session that started after the last save and never saved is mentioned at the next session start, with an offer to record it.
 
 ## Two PCs
@@ -64,3 +66,13 @@ There are four ways to look at what the brain knows, from the simplest to the mo
 - **Community plugins (optional).** The graphify-visualizer and 3D Graph plugins show the graphify graph inside Obsidian. Install them from Settings, Community plugins if you want them.
 
 `brain graph` builds the code graph for free. `brain graph --notes` shows how many changed notes it would send to Gemini and waits for `--yes`. It never falls back to Claude: with no `GEMINI_API_KEY` it refuses.
+
+## Gemini or npm requests hang or return empty 404s on WSL
+
+WSL's IPv6 route can be broken, so a request that picks an IPv6 address hangs or fails. Prefer IPv4:
+
+```
+echo 'precedence ::ffff:0:0/96  100' | sudo tee -a /etc/gai.conf
+```
+
+`setup.sh` prints this suggestion when `getent ahosts generativelanguage.googleapis.com` lists an IPv6 address first.

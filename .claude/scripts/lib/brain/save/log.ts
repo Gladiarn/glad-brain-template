@@ -11,7 +11,10 @@ import { join } from "node:path";
 export type SaveLogEntry = {
 	ts: string;
 	project: string;
+	/** The model that produced the accepted proposal (or the last one tried, on a fallback). */
 	model: string;
+	/** Every model a call went to, in order. */
+	modelsTried: string[];
 	promptTokens: number;
 	outputTokens: number;
 	rounds: number;
