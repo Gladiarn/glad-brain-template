@@ -76,6 +76,9 @@ const run = spawnSync(
 			XDG_CACHE_HOME: join(isolated, "cache"),
 			QMD_CONFIG_DIR: join(isolated, "config", "qmd"),
 			OM_QMD_ISOLATED: isolated,
+			// No test may read this PC's real Gemini key from ~/.config/second-brain/.env.
+			BRAIN_ENV_FILE: join(isolated, "no-brain-env-file"),
+			GEMINI_API_KEY: "",
 			// No detached qmd-refresh-run worker from any hook a test runs
 			// (#337): each one outlived the run by ~30 s and made a qmd call.
 			[REFRESH_SWITCH]: "off",

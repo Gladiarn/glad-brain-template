@@ -31,6 +31,7 @@ import { commitPush, pull, withSaveLock } from "./lib/brain/sync.ts";
 import { markSaved } from "./lib/brain/unsaved.ts";
 import { resolveVaultRoot } from "./lib/brain/vault.ts";
 import { isMainModule } from "./lib/main-guard.ts";
+import { loadStoredKey } from "./lib/brain/env-file.ts";
 
 const USAGE = `usage:
   brain link [--project <name>] [--client <name>] [--repo <path>]
@@ -300,6 +301,7 @@ function cmdStatus(vaultRoot: string): number {
 
 export async function main(argv: string[]): Promise<number> {
 	const [cmd, ...rest] = argv;
+	loadStoredKey(process.env);
 	const vaultRoot = resolveVaultRoot(import.meta.url);
 	try {
 		switch (cmd) {

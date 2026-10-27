@@ -9,7 +9,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { rmTemp } from "./_helpers.ts";
-import { GIT_ENV, REPO_ROOT, git, makeBin, makeRepo, makeVault, runBrain, WSL_ONLY } from "./_brain-helpers.ts";
+import { GIT_ENV, REPO_ROOT, git, makeBin, makeRepo, makeVault, runBrain, tempDir, WSL_ONLY } from "./_brain-helpers.ts";
 
 type MapFile = { projects: Record<string, { project: string; client: string | null }> };
 
@@ -219,6 +219,31 @@ describe("brain status and dispatch", { skip: WSL_ONLY }, () => {
 		assert.equal(r.code, 0, r.stderr);
 		assert.match(r.stdout, /project: site/);
 		assert.match(r.stdout, /client: acme/);
+	});
+
+	test("status reads the key from the env file when the shell did not load it", () => {
+		const home = tempDir("brain-home-");
+		try {
+			mkdirSync(join(home, ".config", "second-brain"), { recursive: true });
+			const key = "AQ.FAKEfakeFAKEfake_FAKE-fakeFAKEfakeFAKEfake";
+			writeFileSync(join(home, ".config", "second-brain", ".env"), `BRAIN_VAULT='${vault}'\nGEMINI_API_KEY='${key}'\n`);
+			const r = runBrain(["status"], { vault, cwd: repo, binDir: bin, env: { HOME: home, BRAIN_ENV_FILE: "" } });
+			assert.equal(r.code, 0, r.stderr);
+			assert.match(r.stdout, /gemini key: set/);
+			assert.ok(!r.stdout.includes(key) && !r.stderr.includes(key));
+		} finally {
+			rmTemp(home);
+		}
+	});
+
+	test("with no key in the environment or the env file, status says not set", () => {
+		const home = tempDir("brain-home-");
+		try {
+			const r = runBrain(["status"], { vault, cwd: repo, binDir: bin, env: { HOME: home, BRAIN_ENV_FILE: "" } });
+			assert.match(r.stdout, /gemini key: not set/);
+		} finally {
+			rmTemp(home);
+		}
 	});
 
 	test("status says so for an unlinked folder", () => {
