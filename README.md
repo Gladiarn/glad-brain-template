@@ -16,6 +16,8 @@ Glad Brain is an Obsidian vault with hooks and a small CLI. When you start Claud
 | Claude fallback | If every Gemini model in the chain is unavailable or rate-limited, or the result fails its check, a Claude Sonnet subagent performs the save and reports that it did. |
 | Multi-PC sync | Sessions pull on start, and saves commit and push. Conflicts are reported, never overwritten. |
 | Knowledge graph | graphify builds a free, code-only graph of each linked repo and a graph of your notes through Gemini. |
+| Code graph at session start | A session in a linked repo starts with a short summary of its code graph (size, hub files) and uses `graphify query` before opening files. A stale graph is rebuilt in the background with no LLM. |
+| Plan lag warning | Each save records the repo's commit. If the code has moved on since, the next session is told how many commits the plan is behind. |
 | Semantic search | QMD searches your notes by meaning, locally, with no API calls. |
 | Clean client repos | `brain link` stores the link in the vault. Nothing is committed to the project repo. |
 | Unsaved-session reminder | If a session ended without saving, the next one offers to save it. |
@@ -27,6 +29,7 @@ Glad Brain is an Obsidian vault with hooks and a small CLI. When you start Claud
 code repo                         private brain repo
 ---------                         ------------------
 session start  -> git pull -> load work/active/<project>/next.md and tasks.md
+               -> load the top of graphify-out/GRAPH_REPORT.md (refreshed in the background if stale)
 "save"         -> Claude writes a summary
                -> brain save: Gemini writes, checks, fixes (max 2 rounds)
                -> script check -> write notes -> commit and push

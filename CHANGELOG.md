@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- load a short summary of a linked repo's code graph at session start: its size, the hub files, and a pointer to `graphify query`, so a session knows the shape of the code without reading it (about 400 tokens)
+- refresh a linked repo's code graph in the background, code-only and with no LLM, when it was built from an older commit
+- record the repo's commit with each save, so the next session is told how many commits the plan is behind and to check `git log` before trusting it
+- offer once to fill an empty plan from the graph report and the recent git log, and only after a yes
+
 ## v1.1.0 — 2026-10-27
 
 ### Added

@@ -25,6 +25,10 @@ QMD loads local search models of about 2.3 GB. If WSL runs out of memory, raise 
 
 Run `brain link` in the repo, once. It adds one entry to `projects.map.json` in the vault, keyed by the repo's git remote so the same entry works on both PCs whatever the local path (a repo with no remote is keyed by its path on that PC only). It creates `work/active/<project>/next.md` and `tasks.md` and one line in `work/Index.md`, and runs the free code-only graphify build. Use `--project <name>` and `--client <name>` to choose the names. Nothing is written into the repo.
 
+The new plan starts empty, and `brain link` does not read the codebase. Each session in the repo starts with the plan and a short summary of the code graph: the size of the codebase, its hub files, and a pointer to `graphify query "<question>" --graph graphify-out/graph.json`, which Claude uses before opening files. While the plan is empty, the session offers once to fill it from `graphify-out/GRAPH_REPORT.md` and `git log --oneline -30` and then save it. That costs about 15–20k tokens, once, and nothing happens unless you say yes.
+
+If the graph report was built from an older commit than HEAD, the session starts `graphify update` in the background. It runs code-only with no LLM, and at most once every 10 minutes.
+
 ## Saving
 
 - Say `save` and Claude writes a short summary of the session. `brain save` has Gemini merge it into the vault notes, check its own work, and pass a plain-script sanity check. Only the current project's folder, its line in the work index, the brain lessons and the linked client note can change.
@@ -34,6 +38,7 @@ Run `brain link` in the repo, once. It adds one entry to `projects.map.json` in 
 - If every Gemini model is unavailable, there is no key, or the result fails its check, nothing is written and Claude files the same summary through a Sonnet subagent, then runs `brain save --commit-only`. It tells you which way it went.
 - Every save is committed and pushed. Two sessions saving at once wait on a lock for up to 30 seconds, then report `save busy`. Every save is logged in `.brain/save-log.jsonl` with the model that produced the saved result, every model tried (`modelsTried`), token counts and outcome.
 - A session that started after the last save and never saved is mentioned at the next session start, with an offer to record it.
+- A save records the code repo's commit in `.brain/last-save/<project>`. If HEAD has moved past it, the next session is told how many commits the plan is behind and to run `git log --oneline <commit>..HEAD` before trusting it.
 
 ## Two PCs
 

@@ -2,16 +2,18 @@
  * What the brain adds to a session's first context.
  *
  * In a linked code repo, reached through bin/brain-hook, that is all the
- * session gets from the vault: the project's plan for today, and any warning.
+ * session gets from the vault: the project's plan for today, the repo's code
+ * graph summary, and any warning.
  * In the vault itself the same blocks join the vault's own context.
  */
 
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join, sep } from "node:path";
 import { resolveProject, type ResolvedProject } from "./project.ts";
 import { pull, type PullResult } from "./sync.ts";
-import { todayContext } from "./today.ts";
-import { transcriptsDirFor, unsavedReminder } from "./unsaved.ts";
+import { codeGraphBlock, repoRoot } from "./code-graph.ts";
+import { planIsEmpty, todayContext } from "./today.ts";
+import { lastSaveCommit, transcriptsDirFor, unsavedReminder } from "./unsaved.ts";
 
 const PROJECT_DIR_VARS = ["CLAUDE_PROJECT_DIR", "CODEX_PROJECT_DIR", "GEMINI_PROJECT_DIR"] as const;
 
@@ -50,6 +52,8 @@ export function brainSessionBlocks(opts: {
 	sync?: PullResult;
 	/** The folder the session started in and its id, to find the earlier sessions' transcripts. */
 	session?: { dir: string; id: string | null };
+	/** The code repo's top folder, for its graphify report; absent in the vault's own session. */
+	repo?: string;
 }): string[] {
 	const blocks: string[] = [];
 	const warning = opts.sync === undefined ? null : syncBlock(opts.sync);
@@ -58,6 +62,20 @@ export function brainSessionBlocks(opts: {
 	if (opts.session !== undefined) {
 		const reminder = unsavedReminder(opts.vaultRoot, opts.project.name, transcriptsDirFor(opts.session.dir), opts.session.id);
 		if (reminder !== null) blocks.push(reminder);
+	}
+	if (opts.repo !== undefined) {
+		let nextText: string | null = null;
+		try {
+			nextText = readFileSync(join(opts.project.dir, "next.md"), "utf8");
+		} catch {
+			/* no plan: todayContext already says so */
+		}
+		const graph = codeGraphBlock({
+			repo: opts.repo,
+			savedCommit: lastSaveCommit(opts.vaultRoot, opts.project.name),
+			planEmpty: nextText !== null && planIsEmpty(nextText),
+		});
+		if (graph !== null) blocks.push(graph);
 	}
 	return blocks;
 }
@@ -81,6 +99,7 @@ export function repoSessionContext(
 		project,
 		...(sync === undefined ? {} : { sync }),
 		session: { dir: sessionDir, id: opts.sessionId ?? null },
+		repo: repoRoot(sessionDir) ?? sessionDir,
 	});
 	return ["## Second Brain", ...blocks].join("\n\n");
 }

@@ -49,6 +49,20 @@ function openTasks(tasksText: string): string | null {
 	return ["#### Open tasks", ...shown, ...(rest > 0 ? [`(${rest} more open tasks in tasks.md)`] : [])].join("\n");
 }
 
+/** True when `next.md` still reads as the fresh template: no line has content outside Related. */
+export function planIsEmpty(nextText: string): boolean {
+	let inRelated = false;
+	for (const line of stripFrontmatter(nextText).replace(/%%[\s\S]*?%%/g, "").split(/\r?\n/)) {
+		if (/^#{1,6} /.test(line)) {
+			inRelated = /^## Related\b/.test(line);
+			continue;
+		}
+		if (inRelated) continue;
+		if (line.replace(/^\s*(?:[-*]|\d+\.)?\s*/, "") !== "") return false;
+	}
+	return true;
+}
+
 export function todayContext(vaultRoot: string, project: ResolvedProject): string {
 	const title = `### Plan for today: ${project.name}${project.client === null ? "" : ` (client: ${project.client})`}`;
 	const rel = `work/active/${project.name}`;

@@ -26,7 +26,8 @@ import { resolveProject, type ResolvedProject } from "./lib/brain/project.ts";
 import { runSave } from "./lib/brain/save/pipeline.ts";
 import { scanDiff } from "./lib/brain/secrets.ts";
 import { parseSummary } from "./lib/brain/save/schema.ts";
-import { sessionProjectDir } from "./lib/brain/session.ts";
+import { isInsideVault, sessionProjectDir } from "./lib/brain/session.ts";
+import { headCommit, repoRoot } from "./lib/brain/code-graph.ts";
 import { commitPush, pull, withSaveLock } from "./lib/brain/sync.ts";
 import { markSaved } from "./lib/brain/unsaved.ts";
 import { resolveVaultRoot } from "./lib/brain/vault.ts";
@@ -89,6 +90,15 @@ function projectForSave(vaultRoot: string): ResolvedProject | null {
 	);
 }
 
+/** The code repo's HEAD at a save, so the next session can tell how far the plan is behind; null in the vault. */
+function saveCommit(vaultRoot: string): string | null {
+	for (const dir of [process.cwd(), sessionProjectDir(process.env, process.cwd())]) {
+		const root = repoRoot(dir);
+		if (root !== null && !isInsideVault(root, vaultRoot) && resolveProject(dir, vaultRoot) !== null) return headCommit(root);
+	}
+	return null;
+}
+
 const BUSY_MESSAGE = "save busy: another session is saving this vault right now; say `save` again in a moment";
 
 function lockWaitMs(): number {
@@ -112,7 +122,7 @@ async function cmdSave(args: string[], vaultRoot: string): Promise<number> {
 			vaultRoot,
 			async () => {
 				const pushed = commitPush(vaultRoot, `brain: save ${project.name}`);
-				markSaved(vaultRoot, project.name);
+				markSaved(vaultRoot, project.name, new Date(), saveCommit(vaultRoot));
 				return pushed;
 			},
 			{ waitMs: lockWaitMs() },
@@ -151,7 +161,7 @@ async function cmdSave(args: string[], vaultRoot: string): Promise<number> {
 			runSave({
 				vaultRoot,
 				summary: parsed.summary,
-				hooks: { commitPush: (m) => commitPush(vaultRoot, m), markSaved: (p) => markSaved(vaultRoot, p) },
+				hooks: { commitPush: (m) => commitPush(vaultRoot, m), markSaved: (p) => markSaved(vaultRoot, p, new Date(), saveCommit(vaultRoot)) },
 			}),
 		{ waitMs: lockWaitMs() },
 	);

@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { rmTemp } from "./_helpers.ts";
+import { lastSaveCommit } from "../lib/brain/unsaved.ts";
 import { git, makeBin, makeRepo, makeVault, runBrain, tempDir, WSL_ONLY } from "./_brain-helpers.ts";
 
 const KEY = "AIzaFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE";
@@ -229,6 +230,16 @@ describe("brain save: commit, push, lock", { skip: WSL_ONLY }, () => {
 		writeFileSync(join(vault, "work/active/site/next.md"), NEXT_NEW);
 		save(["--commit-only"]);
 		assert.ok(existsSync(join(vault, ".brain/last-save/site")));
+	});
+
+	test("a save from a linked repo records the repo's HEAD with the save time", () => {
+		writeFileSync(join(repo, "app.ts"), "1");
+		git(repo, "add", "app.ts");
+		git(repo, "commit", "-q", "-m", "app");
+		const head = git(repo, "rev-parse", "HEAD").trim();
+		writeFileSync(join(vault, "work/active/site/next.md"), NEXT_NEW);
+		save(["--commit-only"]);
+		assert.equal(lastSaveCommit(vault, "site"), head);
 	});
 
 	test("--commit-only commits and pushes a save Claude filed by hand", () => {

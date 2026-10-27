@@ -18,20 +18,30 @@ export function transcriptsDirFor(sessionDir: string, home: string = homedir()):
 	return join(home, ".claude", "projects", sessionDir.replace(/[^A-Za-z0-9]/g, "-"));
 }
 
-export function markSaved(vaultRoot: string, project: string, now: Date = new Date()): void {
+/** `commit`, when given, is the code repo's HEAD at the save: the next session measures the plan's lag from it. */
+export function markSaved(vaultRoot: string, project: string, now: Date = new Date(), commit?: string | null): void {
 	if (!isValidProjectName(project)) throw new Error(`not a usable project name: ${project}`);
 	const dir = join(vaultRoot, ".brain", "last-save");
 	mkdirSync(dir, { recursive: true });
-	writeFileSync(join(dir, project), `${now.toISOString()}\n`, "utf8");
+	writeFileSync(join(dir, project), `${now.toISOString()}\n${commit ? `${commit}\n` : ""}`, "utf8");
+}
+
+function lastSaveLines(vaultRoot: string, project: string): string[] {
+	try {
+		return readFileSync(join(vaultRoot, ".brain", "last-save", project), "utf8").split("\n").map((l) => l.trim());
+	} catch {
+		return [];
+	}
 }
 
 function lastSaveMs(vaultRoot: string, project: string): number | null {
-	try {
-		const t = Date.parse(readFileSync(join(vaultRoot, ".brain", "last-save", project), "utf8").trim());
-		return Number.isFinite(t) ? t : null;
-	} catch {
-		return null;
-	}
+	const t = Date.parse(lastSaveLines(vaultRoot, project)[0] ?? "");
+	return Number.isFinite(t) ? t : null;
+}
+
+export function lastSaveCommit(vaultRoot: string, project: string): string | null {
+	const c = lastSaveLines(vaultRoot, project)[1] ?? "";
+	return /^[0-9a-f]{7,40}$/.test(c) ? c : null;
 }
 
 const localDay = (ms: number): string => {
