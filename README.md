@@ -98,6 +98,12 @@ gh repo create my-brain --private --source . --remote origin --push
 
 It asks once for your Gemini key, without echoing it, and stores it in `~/.config/second-brain/.env` (mode 600, outside the repo). It then installs graphify and QMD, registers the global Claude Code hooks and the `om` MCP server, and installs the secret guard. Re-running it is safe. Options: `--no-qmd`, `--no-install`, `--non-interactive`.
 
+Run it from a **WSL terminal**, not through a chat tool, so the hidden key prompt works. Then:
+
+- **Open a new terminal**, so `brain` is on your PATH.
+- **Restart Claude Code.** Sessions that started before setup don't have the hooks.
+- **To change the key later**, run `./setup.sh --no-install` again and paste the new one. Press Enter instead to keep the current key.
+
 ### 3. Link your projects
 
 In each code repo, once:
@@ -106,6 +112,8 @@ In each code repo, once:
 cd ~/projects/client-site
 brain link --client acme
 ```
+
+This is once per repo. graphify itself is installed once per PC, by setup. For notes that don't belong to any repo, start Claude Code in the vault folder itself, which uses the built-in `general` project.
 
 ### 4. Work as usual
 
