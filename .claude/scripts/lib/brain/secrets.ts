@@ -9,6 +9,7 @@ export type DiffHit = { file: string; line: number; rule: string };
 
 const RULES: readonly { rule: string; re: RegExp }[] = [
 	{ rule: "gemini-key", re: /(?<![A-Za-z0-9])AIza[0-9A-Za-z_-]{35}/ },
+	{ rule: "gemini-key", re: /(?<![A-Za-z0-9])AQ\.[A-Za-z0-9_-]{30,}/ },
 	{ rule: "openai-key", re: /(?<![A-Za-z0-9])sk-[A-Za-z0-9]{20,}/ },
 	{ rule: "github-token", re: /(?<![A-Za-z0-9])gh[pousr]_[A-Za-z0-9]{36}/ },
 	{ rule: "private-key", re: /-----BEGIN [A-Z ]*PRIVATE KEY-----/ },

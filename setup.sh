@@ -86,11 +86,11 @@ fi
 key="${key//$'\r'/}"
 key="${key#"${key%%[![:space:]]*}"}"
 key="${key%"${key##*[![:space:]]}"}"
-if [[ -n "$key" && ! "$key" =~ ^[A-Za-z0-9_-]+$ ]]; then
-	die "that does not look like a Gemini API key (letters, digits, dash and underscore only). Nothing was written."
+if [[ -n "$key" && ! "$key" =~ ^[A-Za-z0-9._-]+$ ]]; then
+	die "that does not look like a Gemini API key (letters, digits, dot, dash and underscore only). Nothing was written."
 fi
 if [[ -z "$key" && -f "$env_file" ]]; then
-	key="$(sed -n "s/^GEMINI_API_KEY='\{0,1\}\([A-Za-z0-9_-]*\)'\{0,1\}\$/\1/p" "$env_file" | tail -n 1)"
+	key="$(sed -n "s/^GEMINI_API_KEY='\{0,1\}\([A-Za-z0-9._-]*\)'\{0,1\}\$/\1/p" "$env_file" | tail -n 1)"
 fi
 
 # --- 3. Install the tools ----------------------------------------------------

@@ -6,8 +6,21 @@
 
 import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { GIT_ENV, REPO_ROOT, git, tempDir, whichBin } from "./_brain-helpers.ts";
+
+/**
+ * A folder holding only `node`, so the setup under test finds Node but none of
+ * the real tools installed beside it (a real qmd or npm would mask the fakes).
+ */
+let nodeOnly: string | null = null;
+function nodeOnlyDir(): string {
+	if (nodeOnly === null) {
+		nodeOnly = tempDir("brain-node-only-");
+		symlinkSync(process.execPath, join(nodeOnly, "node"));
+	}
+	return nodeOnly;
+}
 
 export const FAKE_KEY = "AIzaFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE";
 
@@ -81,7 +94,7 @@ export function runSetup(opts: {
 		env: {
 			...GIT_ENV,
 			HOME: opts.home,
-			PATH: `${opts.tools}:${dirname(process.execPath)}:/usr/bin:/bin`,
+			PATH: `${opts.tools}:${nodeOnlyDir()}:/usr/bin:/bin`,
 			BRAIN_PROC_VERSION: procVersion,
 			WSL_DISTRO_NAME: "Ubuntu-Test",
 			USER: "tester",

@@ -32,6 +32,15 @@ describe("scanForSecrets", () => {
 		);
 	});
 
+	test("a new-format Google key (AQ. prefix) is found", () => {
+		const hits = scanForSecrets("GEMINI_API_KEY=AQ.FAKEfakeFAKEfake_FAKE-fakeFAKEfakeFAKEfake\n");
+		assert.deepEqual(hits.map((h) => [h.rule, h.line]), [["gemini-key", 1]]);
+	});
+
+	test("ordinary dotted words are not flagged as new-format keys", () => {
+		assert.deepEqual(scanForSecrets("see FAQ.md and AQ.short for details"), []);
+	});
+
 	test("an OpenAI-style key, a Slack token and a private key header are found", () => {
 		assert.deepEqual(scanForSecrets(`x ${OPENAI}`).map((h) => h.rule), ["openai-key"]);
 		assert.deepEqual(scanForSecrets(`x ${SLACK}`).map((h) => h.rule), ["slack-token"]);

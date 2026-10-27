@@ -107,6 +107,23 @@ describe("setup.sh", () => {
 			assert.ok(readHome(".config/second-brain/.env").includes(FAKE_KEY));
 		});
 
+		test("a new-format key (AQ. prefix, with a dot) is accepted, stored and kept", () => {
+			const dotted = "AQ.FAKEfakeFAKEfake_FAKE-fakeFAKEfakeFAKEfake";
+			const r = setup({ input: `${dotted}\n` });
+			assert.equal(r.code, 0, r.stderr);
+			assert.ok(readHome(".config/second-brain/.env").includes(`GEMINI_API_KEY='${dotted}'`));
+			assert.ok(!r.stdout.includes(dotted) && !r.stderr.includes(dotted));
+			setup({ input: "\n" });
+			assert.ok(readHome(".config/second-brain/.env").includes(`GEMINI_API_KEY='${dotted}'`));
+			setup({ input: `${FAKE_KEY}\n` });
+		});
+
+		test("a key with characters a shell would act on is refused", () => {
+			const r = setup({ input: "AQ.abc'$(touch x)\n" });
+			assert.notEqual(r.code, 0);
+			assert.ok(readHome(".config/second-brain/.env").includes(FAKE_KEY));
+		});
+
 		test("the key is only ever in .env", () => {
 			for (const out of [first, second]) {
 				assert.ok(!out.stdout.includes(FAKE_KEY), "key on stdout");
