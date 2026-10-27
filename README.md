@@ -217,6 +217,20 @@ This merges template changes into your brain. Your notes are not affected, becau
 
 The full guide is in [docs/brain-setup.md](docs/brain-setup.md).
 
+## About
+
+Glad Brain is developed and maintained by [Gladiarn](https://github.com/Gladiarn).
+
+It began as a fork of obsidian-mind. That foundation was built for a single job; Glad Brain reworks it for people who run many projects and clients across more than one PC. The main changes:
+
+- Per-project plans that load automatically in each linked repo
+- The `save` trigger, with a checked Gemini save and a Claude fallback
+- Automatic git sync between PCs, including conflict handling
+- `brain link`, global hooks, and client repos that stay clean
+- graphify knowledge graphs alongside QMD search
+- A secret guard, a template guard, and a one-command setup for WSL
+- Client, portfolio and production-incident notes in place of the corporate review and Slack workflows
+
 ## License
 
 MIT. Glad Brain includes code from obsidian-mind, obsidian-skills and obsidian-project-vault-template, all of which are MIT-licensed. Their notices are in [NOTICE.md](NOTICE.md).
