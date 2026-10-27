@@ -15,9 +15,9 @@ import { parseHookContext } from "../lib/hook-io.ts";
 import { rmTemp, runScript } from "./_helpers.ts";
 
 const hookContext = (stdout: string): string => parseHookContext(stdout, "UserPromptSubmit");
-import { GIT_ENV, REPO_ROOT, makeRepo, makeVault, tempDir } from "./_brain-helpers.ts";
+import { GIT_ENV, REPO_ROOT, makeRepo, makeVault, tempDir, WSL_ONLY } from "./_brain-helpers.ts";
 
-describe("parseSave", () => {
+describe("parseSave", { skip: WSL_ONLY }, () => {
 	test("a bare save, in any case, with surrounding whitespace or end punctuation, saves the session", () => {
 		for (const p of ["save", "Save", "SAVE", "  save \n", "save.", "save!", "\tSave!!\n", "save..."]) {
 			assert.deepEqual(parseSave(p), { kind: "session" }, JSON.stringify(p));
@@ -65,7 +65,7 @@ describe("parseSave", () => {
 	});
 });
 
-describe("saveInstruction", () => {
+describe("saveInstruction", { skip: WSL_ONLY }, () => {
 	const project: ResolvedProject = {
 		name: "client-site",
 		dir: "/v/work/active/client-site",
@@ -112,7 +112,7 @@ describe("saveInstruction", () => {
 	});
 });
 
-describe("classify-message with the save trigger", () => {
+describe("classify-message with the save trigger", { skip: WSL_ONLY }, () => {
 	const SCRIPT = join(REPO_ROOT, ".claude", "scripts", "classify-message.ts");
 	let vault: string;
 	let home: string;

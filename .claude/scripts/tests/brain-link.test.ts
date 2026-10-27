@@ -9,11 +9,11 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { rmTemp } from "./_helpers.ts";
-import { GIT_ENV, REPO_ROOT, git, makeBin, makeRepo, makeVault, runBrain } from "./_brain-helpers.ts";
+import { GIT_ENV, REPO_ROOT, git, makeBin, makeRepo, makeVault, runBrain, WSL_ONLY } from "./_brain-helpers.ts";
 
 type MapFile = { projects: Record<string, { project: string; client: string | null }> };
 
-describe("brain link", () => {
+describe("brain link", { skip: WSL_ONLY }, () => {
 	let vault: string;
 	let repo: string;
 	let bin: string;
@@ -194,7 +194,7 @@ describe("brain link", () => {
 	});
 });
 
-describe("brain status and dispatch", () => {
+describe("brain status and dispatch", { skip: WSL_ONLY }, () => {
 	let vault: string;
 	let repo: string;
 	let bin: string;
@@ -251,7 +251,7 @@ describe("brain status and dispatch", () => {
 	});
 });
 
-describe("bin/brain wrapper", () => {
+describe("bin/brain wrapper", { skip: WSL_ONLY }, () => {
 	const wrapper = join(REPO_ROOT, "bin", "brain");
 
 	test("is executable and resolves the vault from its own location, following a symlink", () => {

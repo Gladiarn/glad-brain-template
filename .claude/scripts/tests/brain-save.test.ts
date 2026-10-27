@@ -14,7 +14,7 @@ import { checkProposed } from "../lib/brain/save/sanity.ts";
 import { selectFetch } from "../lib/brain/save/gemini.ts";
 import { runSave } from "../lib/brain/save/pipeline.ts";
 import { rmTemp } from "./_helpers.ts";
-import { makeVault, tempDir } from "./_brain-helpers.ts";
+import { makeVault, tempDir, WSL_ONLY } from "./_brain-helpers.ts";
 
 const KEY = "AIzaFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE";
 const NOW = new Date("2026-10-27T10:00:00.000Z");
@@ -116,7 +116,7 @@ const write = (files: { path: string; content: string }[]) => ({ json: { files }
 const OK = { json: { ok: true, problems: [] } };
 const BAD = (...problems: string[]) => ({ json: { ok: false, problems } });
 
-describe("parseSummary", () => {
+describe("parseSummary", { skip: WSL_ONLY }, () => {
 	test("accepts a full valid summary", () => {
 		const r = parseSummary({ ...SUMMARY, clientNote: "prefers Fridays" });
 		assert.ok(r.ok);
@@ -156,7 +156,7 @@ describe("parseSummary", () => {
 	});
 });
 
-describe("allowedTargets", () => {
+describe("allowedTargets", { skip: WSL_ONLY }, () => {
 	let vault: string;
 	beforeEach(() => {
 		vault = makeVault();
@@ -195,7 +195,7 @@ describe("allowedTargets", () => {
 	});
 });
 
-describe("checkProposed (the plain-script sanity check)", () => {
+describe("checkProposed (the plain-script sanity check)", { skip: WSL_ONLY }, () => {
 	const old = "---\ndate: x\n---\n\n# Title\n\n## Keep\n\nreal content here that matters\n\n## Other\n\nmore content that also matters a lot\n";
 	test("passes an unchanged or grown file", () => {
 		assert.equal(checkProposed([{ path: "brain/Gotchas.md", old, next: old + "\n- new lesson\n" }], 0.4), null);
@@ -244,7 +244,7 @@ describe("checkProposed (the plain-script sanity check)", () => {
 	});
 });
 
-describe("selectFetch", () => {
+describe("selectFetch", { skip: WSL_ONLY }, () => {
 	test("BRAIN_GEMINI_FAKE is honoured only under NODE_ENV=test", () => {
 		const dir = makeVault();
 		try {
@@ -258,7 +258,7 @@ describe("selectFetch", () => {
 	});
 });
 
-describe("runSave", () => {
+describe("runSave", { skip: WSL_ONLY }, () => {
 	let vault: string;
 	const read = (rel: string) => readFileSync(join(vault, rel), "utf8");
 	const exists = (rel: string) => existsSync(join(vault, rel));

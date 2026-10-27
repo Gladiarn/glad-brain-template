@@ -9,9 +9,9 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { normalizeRemote, resolveProject } from "../lib/brain/project.ts";
 import { rmTemp } from "./_helpers.ts";
-import { makeRepo, makeVault } from "./_brain-helpers.ts";
+import { makeRepo, makeVault, WSL_ONLY } from "./_brain-helpers.ts";
 
-describe("normalizeRemote", () => {
+describe("normalizeRemote", { skip: WSL_ONLY }, () => {
 	test("the scp-style and https forms of one repo are equal", () => {
 		const a = normalizeRemote("git@github.com:Me/Site.git");
 		const b = normalizeRemote("https://github.com/me/site");
@@ -34,7 +34,7 @@ describe("normalizeRemote", () => {
 	});
 });
 
-describe("resolveProject", () => {
+describe("resolveProject", { skip: WSL_ONLY }, () => {
 	let vault: string;
 	const cleanup: string[] = [];
 	const writeMap = (projects: Record<string, { project: string; client: string | null }>) =>

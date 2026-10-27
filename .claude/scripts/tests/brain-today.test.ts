@@ -11,7 +11,7 @@ import { cutLine } from "../lib/hook-io.ts";
 import { TODAY_LIMIT, todayContext } from "../lib/brain/today.ts";
 import type { ResolvedProject } from "../lib/brain/project.ts";
 import { hookContext, rmTemp, runScript } from "./_helpers.ts";
-import { REPO_ROOT, makeVault } from "./_brain-helpers.ts";
+import { REPO_ROOT, makeVault, WSL_ONLY } from "./_brain-helpers.ts";
 
 const SESSION_START = join(REPO_ROOT, ".claude", "scripts", "session-start.ts");
 
@@ -58,7 +58,7 @@ tags:
 - [x] Set up hosting
 `;
 
-describe("todayContext", () => {
+describe("todayContext", { skip: WSL_ONLY }, () => {
 	let vault: string;
 	const projectOf = (name: string, client: string | null = null): ResolvedProject => ({
 		name,
@@ -141,7 +141,7 @@ describe("todayContext", () => {
 	});
 });
 
-describe("the vault's own session start", () => {
+describe("the vault's own session start", { skip: WSL_ONLY }, () => {
 	let vault: string;
 	beforeEach(() => {
 		vault = makeVault();

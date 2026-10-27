@@ -11,7 +11,7 @@ import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { scanDiff, scanForSecrets } from "../lib/brain/secrets.ts";
 import { rmTemp } from "./_helpers.ts";
-import { GIT_ENV, REPO_ROOT, git, makeBin, makeRepo } from "./_brain-helpers.ts";
+import { GIT_ENV, REPO_ROOT, git, makeBin, makeRepo, WSL_ONLY } from "./_brain-helpers.ts";
 
 const GEMINI = "AIza" + "FAKE".repeat(8) + "FAK"; // 4 + 35 characters
 const GITHUB = "ghp_" + "F".repeat(36);
@@ -19,7 +19,7 @@ const OPENAI = "sk-" + "FAKE".repeat(6);
 const SLACK = "xoxb-" + "0".repeat(12);
 const PRIVATE_KEY = "-----BEGIN RSA PRIVATE KEY-----";
 
-describe("scanForSecrets", () => {
+describe("scanForSecrets", { skip: WSL_ONLY }, () => {
 	test("a Gemini key and a GitHub token are found with their line numbers", () => {
 		const text = `# notes\nthe key is ${GEMINI}\n\nand a token ${GITHUB} here\n`;
 		const hits = scanForSecrets(text);
@@ -91,7 +91,7 @@ describe("scanForSecrets", () => {
 	});
 });
 
-describe("scanDiff", () => {
+describe("scanDiff", { skip: WSL_ONLY }, () => {
 	const diff = (...lines: string[]) => lines.join("\n") + "\n";
 
 	test("flags a secret on an added line with the file and the new line number", () => {
@@ -149,7 +149,7 @@ describe("scanDiff", () => {
 	});
 });
 
-describe("bin/brain-precommit", () => {
+describe("bin/brain-precommit", { skip: WSL_ONLY }, () => {
 	const HOOK = join(REPO_ROOT, "bin", "brain-precommit");
 	let repo: string;
 	let bin: string;

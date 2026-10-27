@@ -9,7 +9,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadConfig } from "../lib/brain/config.ts";
 import { rmTemp } from "./_helpers.ts";
-import { tempDir } from "./_brain-helpers.ts";
+import { tempDir, WSL_ONLY } from "./_brain-helpers.ts";
 
 const DEFAULTS = {
 	geminiModel: "gemini-3.8-flash",
@@ -19,7 +19,7 @@ const DEFAULTS = {
 	shrinkLimit: 0.4,
 };
 
-describe("loadConfig", () => {
+describe("loadConfig", { skip: WSL_ONLY }, () => {
 	let vault: string;
 	beforeEach(() => {
 		vault = tempDir("brain-config-");

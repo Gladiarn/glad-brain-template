@@ -12,11 +12,11 @@ import { dirname, join } from "node:path";
 import { markSaved, transcriptsDirFor, unsavedReminder } from "../lib/brain/unsaved.ts";
 import { parseHookContext } from "../lib/hook-io.ts";
 import { rmTemp } from "./_helpers.ts";
-import { GIT_ENV, REPO_ROOT, makeRepo, tempDir } from "./_brain-helpers.ts";
+import { GIT_ENV, REPO_ROOT, makeRepo, tempDir, WSL_ONLY } from "./_brain-helpers.ts";
 
 const DAY = 86_400_000;
 
-describe("markSaved and unsavedReminder", () => {
+describe("markSaved and unsavedReminder", { skip: WSL_ONLY }, () => {
 	let vault: string;
 	let transcripts: string;
 	const transcript = (session: string, mtime: Date, body = '{"type":"user"}\n') => {
@@ -125,13 +125,13 @@ describe("markSaved and unsavedReminder", () => {
 	});
 });
 
-describe("transcriptsDirFor", () => {
+describe("transcriptsDirFor", { skip: WSL_ONLY }, () => {
 	test("encodes the session folder the way Claude Code names its project folder", () => {
 		assert.equal(transcriptsDirFor("/home/me/my.site", "/h"), "/h/.claude/projects/-home-me-my-site");
 	});
 });
 
-describe("the reminder at session start", () => {
+describe("the reminder at session start", { skip: WSL_ONLY }, () => {
 	const HOOK = join(REPO_ROOT, "bin", "brain-hook");
 	let vault: string;
 	let home: string;

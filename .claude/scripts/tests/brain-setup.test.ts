@@ -11,10 +11,10 @@ import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { rmTemp } from "./_helpers.ts";
 import { CLAUDE_MD_CLOSE, CLAUDE_MD_OPEN } from "../lib/brain/install.ts";
-import { REPO_ROOT } from "./_brain-helpers.ts";
+import { REPO_ROOT, WSL_ONLY } from "./_brain-helpers.ts";
 import { FAKE_KEY, makeFakeTools, makeTemplateClone, readLog, runSetup, script, tempDir } from "./_brain-setup-helpers.ts";
 
-describe("setup.sh", () => {
+describe("setup.sh", { skip: WSL_ONLY }, () => {
 	let root: string;
 	let home: string;
 	let tools: string;

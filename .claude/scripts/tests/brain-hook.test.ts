@@ -11,7 +11,7 @@ import { chmodSync, existsSync, mkdirSync, symlinkSync, writeFileSync } from "no
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { rmTemp, hookContext } from "./_helpers.ts";
-import { GIT_ENV, REPO_ROOT, makeRepo, makeVault, tempDir } from "./_brain-helpers.ts";
+import { GIT_ENV, REPO_ROOT, makeRepo, makeVault, tempDir, WSL_ONLY } from "./_brain-helpers.ts";
 
 const HOOK = join(REPO_ROOT, "bin", "brain-hook");
 const FAKE_KEY = "AIzaFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE";
@@ -32,7 +32,7 @@ tags:
 1. ${marker}
 `;
 
-describe("bin/brain-hook", () => {
+describe("bin/brain-hook", { skip: WSL_ONLY }, () => {
 	let vault: string;
 	let home: string;
 	let repo: string;

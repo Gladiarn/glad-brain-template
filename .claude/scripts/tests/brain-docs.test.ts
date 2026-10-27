@@ -8,7 +8,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { REPO_ROOT } from "./_brain-helpers.ts";
+import { REPO_ROOT, WSL_ONLY } from "./_brain-helpers.ts";
 
 const read = (rel: string) => readFileSync(join(REPO_ROOT, rel), "utf8");
 const section = (text: string, heading: string): string => {
@@ -16,7 +16,7 @@ const section = (text: string, heading: string): string => {
 	return m?.[1] ?? "";
 };
 
-describe("README", () => {
+describe("README", { skip: WSL_ONLY }, () => {
 	const readme = read("README.md");
 
 	test("introduces the template and links the credits", () => {
@@ -54,7 +54,7 @@ describe("README", () => {
 	});
 });
 
-describe("docs/brain-setup.md", () => {
+describe("docs/brain-setup.md", { skip: WSL_ONLY }, () => {
 	const guide = read("docs/brain-setup.md");
 
 	test("has the viewing section and the setup facts", () => {

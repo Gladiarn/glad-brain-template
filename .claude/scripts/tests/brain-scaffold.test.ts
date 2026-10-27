@@ -10,13 +10,13 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { validateContent, parseFrontmatterRequired } from "../lib/frontmatter.ts";
 import { loadConfig } from "../lib/brain/config.ts";
-import { REPO_ROOT } from "./_brain-helpers.ts";
+import { REPO_ROOT, WSL_ONLY } from "./_brain-helpers.ts";
 
 const read = (rel: string) => readFileSync(join(REPO_ROOT, rel), "utf8");
 const manifest = JSON.parse(read("vault-manifest.json")) as Record<string, unknown>;
 const required = parseFrontmatterRequired(manifest);
 
-describe("project templates", () => {
+describe("project templates", { skip: WSL_ONLY }, () => {
 	const templates = ["Project Next.md", "Project Tasks.md", "Session.md", "Decision.md"];
 
 	test("all four templates exist and open with frontmatter", () => {
@@ -50,7 +50,7 @@ describe("project templates", () => {
 	});
 });
 
-describe("the general project", () => {
+describe("the general project", { skip: WSL_ONLY }, () => {
 	test("next.md and tasks.md exist and pass the work-note frontmatter rules", () => {
 		for (const f of ["next.md", "tasks.md"]) {
 			const rel = `work/active/general/${f}`;
@@ -68,7 +68,7 @@ describe("the general project", () => {
 	});
 });
 
-describe("shipped data files", () => {
+describe("shipped data files", { skip: WSL_ONLY }, () => {
 	test("projects.map.json starts empty", () => {
 		assert.deepEqual(JSON.parse(read("projects.map.json")), { projects: {} });
 	});

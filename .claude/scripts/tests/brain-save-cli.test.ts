@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { rmTemp } from "./_helpers.ts";
-import { git, makeBin, makeRepo, makeVault, runBrain, tempDir } from "./_brain-helpers.ts";
+import { git, makeBin, makeRepo, makeVault, runBrain, tempDir, WSL_ONLY } from "./_brain-helpers.ts";
 
 const KEY = "AIzaFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE";
 
@@ -41,7 +41,7 @@ const SUMMARY = {
 	blocked: [],
 };
 
-describe("brain save", () => {
+describe("brain save", { skip: WSL_ONLY }, () => {
 	let vault: string;
 	let repo: string;
 	let bin: string;
@@ -158,7 +158,7 @@ describe("brain save", () => {
 	});
 });
 
-describe("brain save: commit, push, lock", () => {
+describe("brain save: commit, push, lock", { skip: WSL_ONLY }, () => {
 	let root: string;
 	let remote: string;
 	let vault: string;
@@ -281,7 +281,7 @@ describe("brain save: commit, push, lock", () => {
 	});
 });
 
-describe("brain sync", () => {
+describe("brain sync", { skip: WSL_ONLY }, () => {
 	let root: string;
 	let remote: string;
 	let a: string;

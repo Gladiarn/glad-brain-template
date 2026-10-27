@@ -6,6 +6,7 @@
 
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import { WSL_ONLY } from "./_brain-helpers.ts";
 import {
 	BRAIN_HOOK_EVENTS,
 	CLAUDE_MD_CLOSE,
@@ -21,7 +22,7 @@ type Settings = { hooks?: Record<string, { matcher?: string; hooks: { type: stri
 const brainEntries = (s: Settings, event: string) =>
 	(s.hooks?.[event] ?? []).filter((e) => e.hooks.some((h) => h.command.includes("brain-hook")));
 
-describe("mergeHooks", () => {
+describe("mergeHooks", { skip: WSL_ONLY }, () => {
 	test("adds exactly one brain entry to each of the five events", () => {
 		const { settings } = mergeHooks({}, VAULT);
 		assert.deepEqual(Object.keys((settings as Settings).hooks ?? {}).sort(), [...BRAIN_HOOK_EVENTS.map((e) => e.event)].sort());
@@ -105,7 +106,7 @@ describe("mergeHooks", () => {
 	});
 });
 
-describe("mergeClaudeMd", () => {
+describe("mergeClaudeMd", { skip: WSL_ONLY }, () => {
 	test("creates the section in an empty file, naming the vault", () => {
 		const { text } = mergeClaudeMd("", VAULT);
 		assert.ok(text.startsWith(CLAUDE_MD_OPEN));
@@ -150,7 +151,7 @@ describe("mergeClaudeMd", () => {
 	});
 });
 
-describe("setQmdEnabled", () => {
+describe("setQmdEnabled", { skip: WSL_ONLY }, () => {
 	test("sets the flag and keeps every other key", () => {
 		const out = JSON.parse(setQmdEnabled('{"geminiModel":"x","qmdEnabled":true,"maxFixRounds":2}', false));
 		assert.deepEqual(out, { geminiModel: "x", qmdEnabled: false, maxFixRounds: 2 });

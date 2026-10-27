@@ -12,12 +12,12 @@ import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { checkTemplatePaths, parseTemplatePaths } from "../../../.github/scripts/template-guard.ts";
 import { rmTemp } from "./_helpers.ts";
-import { GIT_ENV, REPO_ROOT, git, makeRepo } from "./_brain-helpers.ts";
+import { GIT_ENV, REPO_ROOT, git, makeRepo, WSL_ONLY } from "./_brain-helpers.ts";
 
 const GUARD = join(REPO_ROOT, ".github", "scripts", "template-guard.ts");
 const globs = parseTemplatePaths(readFileSync(join(REPO_ROOT, ".template-paths"), "utf8"));
 
-describe("checkTemplatePaths", () => {
+describe("checkTemplatePaths", { skip: WSL_ONLY }, () => {
 	test("a project note is offending", () => {
 		assert.deepEqual(checkTemplatePaths(["work/active/acme/next.md"], globs), ["work/active/acme/next.md"]);
 	});
@@ -78,7 +78,7 @@ describe("checkTemplatePaths", () => {
 	});
 });
 
-describe("the repo's own files", () => {
+describe("the repo's own files", { skip: WSL_ONLY }, () => {
 	test("every file in this repo passes its own allowlist", () => {
 		if (!existsSync(join(REPO_ROOT, ".git"))) return;
 		const r = spawnSync("git", ["ls-files", "--cached", "--others", "--exclude-standard"], { cwd: REPO_ROOT, encoding: "utf8", windowsHide: true });
@@ -95,7 +95,7 @@ describe("the repo's own files", () => {
 	});
 });
 
-describe("template-guard.ts as CI runs it", () => {
+describe("template-guard.ts as CI runs it", { skip: WSL_ONLY }, () => {
 	let repo: string;
 	const run = (...args: string[]) =>
 		spawnSync(process.execPath, ["--disable-warning=ExperimentalWarning", "--experimental-strip-types", GUARD, ...args], {
@@ -171,7 +171,7 @@ describe("template-guard.ts as CI runs it", () => {
 	});
 });
 
-describe("the workflow", () => {
+describe("the workflow", { skip: WSL_ONLY }, () => {
 	const yml = existsSync(join(REPO_ROOT, ".github/workflows/template-guard.yml"))
 		? readFileSync(join(REPO_ROOT, ".github/workflows/template-guard.yml"), "utf8")
 		: "";

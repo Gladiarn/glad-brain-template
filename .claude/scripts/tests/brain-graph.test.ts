@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "
 import { dirname, join } from "node:path";
 import { graphCommand, viewGraph } from "../lib/brain/graph.ts";
 import { rmTemp } from "./_helpers.ts";
-import { REPO_ROOT, makeBin, makeVault, runBrain, tempDir } from "./_brain-helpers.ts";
+import { REPO_ROOT, makeBin, makeVault, runBrain, tempDir, WSL_ONLY } from "./_brain-helpers.ts";
 
 const KEY = "AIzaFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE";
 const ENV_PROBE = 'echo "BACKEND=$GRAPHIFY_BACKEND GEMINI=${GEMINI_API_KEY:+set} ANTHROPIC=${ANTHROPIC_API_KEY:+set} OPENAI=${OPENAI_API_KEY:+set} GOOGLE=${GOOGLE_API_KEY:+set}" >> "${0%/*}/env.log"';
@@ -24,7 +24,7 @@ const lines = (file: string): string[] =>
 				.filter((l) => l !== "")
 		: [];
 
-describe("repo files for the graph", () => {
+describe("repo files for the graph", { skip: WSL_ONLY }, () => {
 	test(".graphifyignore keeps the machine-local and generated folders out", () => {
 		const ignore = readFileSync(join(REPO_ROOT, ".graphifyignore"), "utf8").split("\n");
 		for (const entry of [".obsidian/", "graphify-out/cache/", ".brain/", "bases/", "templates/"]) {
@@ -43,7 +43,7 @@ describe("repo files for the graph", () => {
 	});
 });
 
-describe("graphCommand", () => {
+describe("graphCommand", { skip: WSL_ONLY }, () => {
 	let vault: string;
 	let bin: string;
 	const log = () => lines(join(bin, "graphify.log"));
@@ -165,7 +165,7 @@ describe("graphCommand", () => {
 	});
 });
 
-describe("viewGraph", () => {
+describe("viewGraph", { skip: WSL_ONLY }, () => {
 	let vault: string;
 	let bin: string;
 	let scratch: string;
@@ -243,7 +243,7 @@ describe("viewGraph", () => {
 	});
 });
 
-describe("brain graph and brain view on the command line", () => {
+describe("brain graph and brain view on the command line", { skip: WSL_ONLY }, () => {
 	let vault: string;
 	let bin: string;
 	beforeEach(() => {
@@ -288,7 +288,7 @@ describe("brain graph and brain view on the command line", () => {
 	});
 });
 
-describe("graph after a save", () => {
+describe("graph after a save", { skip: WSL_ONLY }, () => {
 	const NEXT_OLD = "---\ndate: x\nquarter: Q4-2026\nstatus: active\ndescription: d\ntags:\n  - work-note\n---\n\n## What To Do Next\n\n1. a\n";
 	let vault: string;
 	let repo: string;

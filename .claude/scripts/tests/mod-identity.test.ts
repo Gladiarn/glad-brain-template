@@ -9,7 +9,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -31,7 +31,7 @@ describe("the mod's name", () => {
 	test("plugin.json names it glad-brain, matching its folder", () => {
 		const plugin = JSON.parse(readFileSync(join(MOD, ".claude-plugin/plugin.json"), "utf-8")) as { name: string; version: string };
 		assert.equal(plugin.name, "glad-brain");
-		assert.equal(plugin.name, MOD.split("/").pop());
+		assert.equal(plugin.name, basename(MOD));
 	});
 
 	test("plugin.json carries the template's version", () => {

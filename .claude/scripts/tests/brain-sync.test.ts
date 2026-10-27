@@ -11,7 +11,7 @@ import { dirname, join } from "node:path";
 import { commitPush, pull, withSaveLock } from "../lib/brain/sync.ts";
 import { parseHookContext } from "../lib/hook-io.ts";
 import { rmTemp, runScript } from "./_helpers.ts";
-import { GIT_ENV, REPO_ROOT, git, makeRepo, tempDir } from "./_brain-helpers.ts";
+import { GIT_ENV, REPO_ROOT, git, makeRepo, tempDir, WSL_ONLY } from "./_brain-helpers.ts";
 import { spawnSync } from "node:child_process";
 
 // commitPush and pull run git in this process, so it needs an identity.
@@ -36,7 +36,7 @@ tags:
 `;
 const PLAN = "work/active/x/next.md";
 
-describe("pull, commitPush and the two-PC flow", () => {
+describe("pull, commitPush and the two-PC flow", { skip: WSL_ONLY }, () => {
 	let root: string;
 	let remote: string;
 	let a: string;
@@ -237,7 +237,7 @@ describe("pull, commitPush and the two-PC flow", () => {
 	});
 });
 
-describe("withSaveLock", () => {
+describe("withSaveLock", { skip: WSL_ONLY }, () => {
 	let vault: string;
 	beforeEach(() => {
 		vault = tempDir("brain-lock-");
@@ -308,7 +308,7 @@ describe("withSaveLock", () => {
 	});
 });
 
-describe("pull wired into session start", () => {
+describe("pull wired into session start", { skip: WSL_ONLY }, () => {
 	const HOOK = join(REPO_ROOT, "bin", "brain-hook");
 	const SESSION_START = join(REPO_ROOT, ".claude", "scripts", "session-start.ts");
 	let root: string;

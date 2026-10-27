@@ -110,3 +110,9 @@ export function runBrain(
 	);
 	return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", code: r.status ?? -1 };
 }
+
+/**
+ * The brain CLI, its hooks and setup.sh target WSL and Linux (bash, POSIX
+ * paths, fake tools as shell scripts). On native Windows these suites skip.
+ */
+export const WSL_ONLY: string | false = process.platform === "win32" ? "the brain CLI targets WSL and Linux" : false;

@@ -12,10 +12,10 @@ import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { parseHookContext } from "../lib/hook-io.ts";
 import { rmTemp } from "./_helpers.ts";
-import { GIT_ENV, git, makeRepo } from "./_brain-helpers.ts";
+import { GIT_ENV, git, makeRepo, WSL_ONLY } from "./_brain-helpers.ts";
 import { FAKE_KEY, makeFakeTools, makeTemplateClone, readLog, runSetup, tempDir } from "./_brain-setup-helpers.ts";
 
-describe("the second brain end to end", () => {
+describe("the second brain end to end", { skip: WSL_ONLY }, () => {
 	let root: string;
 	let remote: string;
 	let tools: string;
